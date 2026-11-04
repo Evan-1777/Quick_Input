@@ -1,0 +1,91 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Test frontend
+        working-directory: frontend
+        run: npm test
+
+      - name: Type check and build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test backend
+        run: go test ./...
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: Build Windows binary
+        run: wails build -platform windows/amd64 -o quick-input.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-input-windows-amd64
+          path: build/bin/quick-input.exe
+          if-no-files-found: error
+
+      - name: Publish acceptance checklist
+        shell: pwsh
+        run: |
+          @'
+          ### Windows 11 验收核对
+          - [ ] 双击 quick-input.exe 唤醒已运行实例并打开管理窗口
+          - [ ] Alt+Space 唤出悬浮窗，再按一次收起；焦点回到原应用
+          - [ ] 托盘右键菜单可新建预设文本、打开管理窗口与退出
+          - [ ] 选中文本后粘贴到原输入框，剪贴板文本恢复（期间未复制新内容）
+          - [ ] 125% / 150% 缩放下悬浮窗不越出显示器工作区
+          - [ ] 批量移入分组、批量增删标签、删除前二次确认均生效
+          '@ >> $env:GITHUB_STEP_SUMMARY
+
+  release:
+    needs: windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: quick-input-windows-amd64
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/quick-input.exe \
+            --title "Quick Input $TAG" \
+            --notes "首个公开版本：全局热键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置；系统托盘常驻，支持批量管理与分类维护。下载后直接运行，需要 Windows 11 x64。"
