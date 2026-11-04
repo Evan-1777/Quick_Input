@@ -1,6 +1,9 @@
 package platform
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestScaleByDPI(t *testing.T) {
 	cases := []struct {
@@ -42,6 +45,69 @@ func TestClampWindowPosition(t *testing.T) {
 	for _, tc := range cases {
 		if got := ClampWindowPosition(tc.anchor, tc.w, tc.h, tc.work); got != tc.want {
 			t.Fatalf("%s: ClampWindowPosition = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestParseHotkey(t *testing.T) {
+	valid := []struct {
+		spec string
+		want Hotkey
+		out  string
+	}{
+		{"Alt+Space", Hotkey{Modifiers: ModAlt, Key: 0x20}, "Alt+Space"},
+		{"ctrl+shift+q", Hotkey{Modifiers: ModControl | ModShift, Key: 0x51}, "Ctrl+Shift+Q"},
+		{"F12+Ctrl", Hotkey{Modifiers: ModControl, Key: 0x7B}, "Ctrl+F12"},
+		{"Ctrl+Alt+1", Hotkey{Modifiers: ModControl | ModAlt, Key: 0x31}, "Ctrl+Alt+1"},
+		{" Win + Enter ", Hotkey{Modifiers: ModWin, Key: 0x0D}, "Win+Enter"},
+	}
+	for _, tc := range valid {
+		got, err := ParseHotkey(tc.spec)
+		if err != nil {
+			t.Fatalf("ParseHotkey(%q): %v", tc.spec, err)
+		}
+		if got != tc.want {
+			t.Fatalf("ParseHotkey(%q) = %+v, want %+v", tc.spec, got, tc.want)
+		}
+		if got.String() != tc.out {
+			t.Fatalf("ParseHotkey(%q).String() = %q, want %q", tc.spec, got.String(), tc.out)
+		}
+	}
+
+	invalid := []string{"", "Space", "Ctrl+", "Alt+Q+Space", "Alt+Alt+Q", "Alt+F13", "Hyper+Q"}
+	for _, spec := range invalid {
+		if _, err := ParseHotkey(spec); !errors.Is(err, ErrInvalidHotkey) {
+			t.Fatalf("ParseHotkey(%q) err = %v, want ErrInvalidHotkey", spec, err)
+		}
+	}
+
+	if got := (Hotkey{Modifiers: ModAlt, Key: 0x99}).String(); got != "" {
+		t.Fatalf("未知键码 String() = %q, want 空串", got)
+	}
+}
+
+func TestHotkeyFallbacks(t *testing.T) {
+	cases := []struct {
+		name    string
+		initial string
+		want    []string
+	}{
+		{"空串", "", []string{"Alt+Space", "Alt+Q"}},
+		{"默认组合", "Alt+Space", []string{"Alt+Space", "Alt+Q"}},
+		{"自定义组合", "Ctrl+Shift+Q", []string{"Ctrl+Shift+Q", "Alt+Space", "Alt+Q"}},
+		{"小写输入", "ctrl+alt+k", []string{"Ctrl+Alt+K", "Alt+Space", "Alt+Q"}},
+		{"非法组合", "Hyper+Q", []string{"Alt+Space", "Alt+Q"}},
+		{"回退组合", "Alt+Q", []string{"Alt+Q", "Alt+Space"}},
+	}
+	for _, tc := range cases {
+		got := hotkeyFallbacks(tc.initial)
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s: hotkeyFallbacks(%q) = %v, want %v", tc.name, tc.initial, got, tc.want)
+		}
+		for i := range tc.want {
+			if got[i] != tc.want[i] {
+				t.Fatalf("%s: hotkeyFallbacks(%q) = %v, want %v", tc.name, tc.initial, got, tc.want)
+			}
 		}
 	}
 }

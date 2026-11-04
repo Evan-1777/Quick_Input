@@ -12,11 +12,15 @@ type StubBridge struct {
 	Visible        bool
 	CurrentMode    string
 	LastPosition   Point
+	HotkeySpec     string
 }
 
 // NewBridge 返回非 Windows 平台的内存桩。
-func NewBridge(windowTitle string) Bridge {
-	return &StubBridge{}
+func NewBridge(windowTitle, initialHotkey string) Bridge {
+	if initialHotkey == "" {
+		initialHotkey = DefaultHotkey
+	}
+	return &StubBridge{HotkeySpec: initialHotkey}
 }
 
 func (s *StubBridge) Start(cb Callbacks) error { return nil }
@@ -62,5 +66,17 @@ func (s *StubBridge) PasteTextToTarget(text string) error {
 
 	s.LastPastedText = text
 	s.Visible = false
+	return nil
+}
+
+func (s *StubBridge) SetHotkey(spec string) error {
+	h, err := ParseHotkey(spec)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.HotkeySpec = h.String()
 	return nil
 }

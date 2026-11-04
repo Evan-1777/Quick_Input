@@ -78,15 +78,6 @@ export function FolderIcon(props: IconProps) {
   );
 }
 
-export function TagIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M2.4 2.4h4.8L14 9.2l-4.8 4.8L2.4 7.2z" />
-      <circle cx="5.4" cy="5.4" r="1" />
-    </Svg>
-  );
-}
-
 export function WindowIcon(props: IconProps) {
   return (
     <Svg {...props}>
@@ -100,6 +91,23 @@ export function ChevronDownIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <path d="M4.2 6.2 8 10l3.8-3.8" />
+    </Svg>
+  );
+}
+
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M9.8 3.8 5.6 8l4.2 4.2" />
+    </Svg>
+  );
+}
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="2.4" />
+      <path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3" />
     </Svg>
   );
 }
@@ -118,5 +126,18 @@ export function RetryIcon(props: IconProps) {
       <path d="M13 8a5 5 0 1 1-1.6-3.7" />
       <path d="M13.2 2.8v3.4H9.8" />
     </Svg>
+  );
+}
+
+/** 品牌标识：24 视图简化几何，与 build/appicon.svg 同源同色。 */
+export function AppMarkIcon({ className = 'h-4 w-4' }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} stroke="none" aria-hidden="true">
+      <rect width="24" height="24" rx="5.4" fill="#0072c6" />
+      <rect x="4.8" y="3.6" width="14.4" height="16.8" rx="1.8" fill="#ffffff" />
+      <rect x="7.2" y="6.8" width="9.6" height="2.2" rx="1.1" fill="#0078d4" />
+      <rect x="7.2" y="10.8" width="9.6" height="2.2" rx="1.1" fill="#0078d4" />
+      <rect x="7.2" y="15" width="5.6" height="1.8" rx="0.9" fill="#a8cdec" />
+    </svg>
   );
 }

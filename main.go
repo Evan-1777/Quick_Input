@@ -26,7 +26,11 @@ func main() {
 	}
 	defer st.Close()
 
-	bridge := platform.NewBridge("Quick Input")
+	hotkey, err := st.GetSetting(store.SettingHotkey)
+	if err != nil {
+		log.Printf("读取快捷键设置失败: %v", err)
+	}
+	bridge := platform.NewBridge("Quick Input", hotkey)
 	application := app.NewApp(st, bridge)
 
 	err = wails.Run(&options.App{

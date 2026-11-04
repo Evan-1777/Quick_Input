@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"testing"
 
 	"quick-input/internal/platform"
@@ -11,6 +12,10 @@ type fakeBridge struct {
 	lastText string
 	visible  bool
 	mode     string
+
+	hotkey      string
+	hotkeyCalls []string
+	hotkeyErr   error
 }
 
 func (f *fakeBridge) Start(platform.Callbacks) error { return nil }
@@ -35,6 +40,15 @@ func (f *fakeBridge) MinimizeWindow() { f.visible = false }
 func (f *fakeBridge) PasteTextToTarget(text string) error {
 	f.lastText = text
 	f.visible = false
+	return nil
+}
+
+func (f *fakeBridge) SetHotkey(spec string) error {
+	f.hotkeyCalls = append(f.hotkeyCalls, spec)
+	if f.hotkeyErr != nil {
+		return f.hotkeyErr
+	}
+	f.hotkey = spec
 	return nil
 }
 
@@ -159,5 +173,60 @@ func TestBatchOperationsReflectedInBootstrap(t *testing.T) {
 	}
 	if data.WindowState.Mode != platform.ModeOverlay {
 		t.Fatalf("初始窗口模式 = %q", data.WindowState.Mode)
+	}
+}
+
+func TestSetHotkeyPersistsAndRefreshesBootstrap(t *testing.T) {
+	application, bridge, st, _ := newTestApp(t)
+
+	if err := application.SetHotkey("ctrl+alt+k"); err != nil {
+		t.Fatalf("SetHotkey: %v", err)
+	}
+	if bridge.hotkey != "Ctrl+Alt+K" {
+		t.Fatalf("桥接层收到 %q", bridge.hotkey)
+	}
+	if saved, err := st.GetSetting(store.SettingHotkey); err != nil || saved != "Ctrl+Alt+K" {
+		t.Fatalf("持久化值 = %q, %v", saved, err)
+	}
+	data, err := application.GetBootstrapData()
+	if err != nil {
+		t.Fatalf("GetBootstrapData: %v", err)
+	}
+	if data.Settings.Hotkey != "Ctrl+Alt+K" {
+		t.Fatalf("Bootstrap 快捷键 = %q", data.Settings.Hotkey)
+	}
+}
+
+func TestSetHotkeyRejectsInvalidWithoutBridgeCall(t *testing.T) {
+	application, bridge, st, _ := newTestApp(t)
+
+	err := application.SetHotkey("Hyper+Q")
+	if !errors.Is(err, platform.ErrInvalidHotkey) {
+		t.Fatalf("非法组合 err = %v", err)
+	}
+	if len(bridge.hotkeyCalls) != 0 {
+		t.Fatalf("非法组合仍调用桥接层: %v", bridge.hotkeyCalls)
+	}
+	if saved, _ := st.GetSetting(store.SettingHotkey); saved != "" {
+		t.Fatalf("非法组合写入数据库: %q", saved)
+	}
+	data, err := application.GetBootstrapData()
+	if err != nil {
+		t.Fatalf("GetBootstrapData: %v", err)
+	}
+	if data.Settings.Hotkey != platform.DefaultHotkey {
+		t.Fatalf("默认快捷键 = %q", data.Settings.Hotkey)
+	}
+}
+
+func TestSetHotkeyBridgeErrorKeepsSetting(t *testing.T) {
+	application, bridge, st, _ := newTestApp(t)
+	bridge.hotkeyErr = errors.New("快捷键被占用")
+
+	if err := application.SetHotkey("Ctrl+Shift+Q"); err == nil {
+		t.Fatal("桥接层失败时未返回错误")
+	}
+	if saved, _ := st.GetSetting(store.SettingHotkey); saved != "" {
+		t.Fatalf("注册失败仍写入数据库: %q", saved)
 	}
 }

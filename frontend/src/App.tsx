@@ -90,6 +90,10 @@ export default function App() {
         await refresh();
       },
       triggerPaste: (id) => api.triggerPaste(id),
+      async setHotkey(spec) {
+        await api.setHotkey(spec);
+        await refresh();
+      },
       hideWindow: () => api.hideWindow(),
       minimizeWindow: () => api.minimizeWindow(),
       switchToManager: (open) => api.switchToManager(open),
@@ -126,6 +130,7 @@ export default function App() {
         groups={data.groups}
         tags={data.tags}
         snippets={data.snippets}
+        settings={data.settings}
         creatorRequested={creatorRequested}
         onCreatorHandled={handleCreatorHandled}
         actions={actions}

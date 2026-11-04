@@ -44,11 +44,16 @@ export interface WindowStatePayload {
   openCreator: boolean;
 }
 
+export interface SettingsPayload {
+  hotkey: string;
+}
+
 export interface BootstrapPayload {
   groups: Group[];
   tags: Tag[];
   snippets: Snippet[];
   windowState: WindowStatePayload;
+  settings: SettingsPayload;
 }
 
 export interface AppActions {
@@ -61,6 +66,7 @@ export interface AppActions {
   batchMoveGroup(ids: number[], groupId: number | null): Promise<void>;
   batchUpdateTags(ids: number[], addTagIds: number[], removeTagIds: number[]): Promise<void>;
   triggerPaste(id: number): Promise<void>;
+  setHotkey(spec: string): Promise<void>;
   hideWindow(): Promise<void>;
   minimizeWindow(): Promise<void>;
   switchToManager(openCreator: boolean): Promise<void>;

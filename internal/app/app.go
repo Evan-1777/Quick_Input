@@ -3,6 +3,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -20,12 +22,18 @@ type WindowStatePayload struct {
 	OpenCreator bool   `json:"openCreator"`
 }
 
+// SettingsPayload 是全局配置。
+type SettingsPayload struct {
+	Hotkey string `json:"hotkey"`
+}
+
 // BootstrapPayload 是前端初始化所需的全部数据。
 type BootstrapPayload struct {
 	Groups      []store.Group      `json:"groups"`
 	Tags        []store.Tag        `json:"tags"`
 	Snippets    []store.Snippet    `json:"snippets"`
 	WindowState WindowStatePayload `json:"windowState"`
+	Settings    SettingsPayload    `json:"settings"`
 }
 
 // App 是 Wails 绑定服务。
@@ -120,12 +128,51 @@ func (a *App) GetBootstrapData() (BootstrapPayload, error) {
 	if err != nil {
 		return BootstrapPayload{}, err
 	}
+	hotkey, err := a.store.GetSetting(store.SettingHotkey)
+	if err != nil {
+		return BootstrapPayload{}, err
+	}
+	if hotkey == "" {
+		hotkey = platform.DefaultHotkey
+	}
 
 	a.mu.Lock()
 	state := a.state
 	a.mu.Unlock()
 
-	return BootstrapPayload{Groups: groups, Tags: tags, Snippets: snippets, WindowState: state}, nil
+	return BootstrapPayload{
+		Groups:      groups,
+		Tags:        tags,
+		Snippets:    snippets,
+		WindowState: state,
+		Settings:    SettingsPayload{Hotkey: hotkey},
+	}, nil
+}
+
+// SetHotkey 切换全局唤出快捷键：注册成功后持久化，写库失败时回滚注册。
+func (a *App) SetHotkey(spec string) error {
+	prev, err := a.store.GetSetting(store.SettingHotkey)
+	if err != nil {
+		return err
+	}
+	if prev == "" {
+		prev = platform.DefaultHotkey
+	}
+
+	h, err := platform.ParseHotkey(spec)
+	if err != nil {
+		return err
+	}
+	if err := a.bridge.SetHotkey(h.String()); err != nil {
+		return err
+	}
+	if err := a.store.SetSetting(store.SettingHotkey, h.String()); err != nil {
+		if rollbackErr := a.bridge.SetHotkey(prev); rollbackErr != nil {
+			return fmt.Errorf("保存设置失败且无法恢复原快捷键: %w", errors.Join(err, rollbackErr))
+		}
+		return fmt.Errorf("保存设置失败，已恢复原快捷键: %w", err)
+	}
+	return nil
 }
 
 // SaveSnippet 新建或编辑预设文本。

@@ -21,6 +21,9 @@ var (
 	ErrInvalidInput = errors.New("输入参数不能为空")
 )
 
+// SettingHotkey 是全局唤出快捷键的设置键。
+const SettingHotkey = "hotkey"
+
 // Group 是预设文本的单选归属分组，Name 全库唯一。
 type Group struct {
 	ID        int64  `json:"id"`
@@ -91,6 +94,10 @@ var schema = []string{
 		tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
 		PRIMARY KEY (snippet_id, tag_id)
 	)`,
+	`CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	)`,
 }
 
 // NewStore 打开（必要时创建）数据库并保证表结构就绪。
@@ -127,6 +134,28 @@ func NewStore(dbPath string) (*Store, error) {
 // Close 关闭数据库连接。
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// GetSetting 读取键值设置；键不存在时返回空串。
+func (s *Store) GetSetting(key string) (string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// SetSetting 写入或覆盖键值设置。
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	return err
 }
 
 // ListGroups 返回全部按名称排序的分组。

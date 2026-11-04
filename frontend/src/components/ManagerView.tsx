@@ -2,17 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { filterSnippets, toggleSelection } from '../filter.ts';
-import type { AppActions, FilterState, Group, Snippet, Tag } from '../types.ts';
+import type { AppActions, FilterState, Group, SettingsPayload, Snippet, Tag } from '../types.ts';
 import EditorDrawer from './EditorDrawer';
 import EmptyState from './EmptyState';
+import SettingsPage from './SettingsPage';
 import {
+  AppMarkIcon,
   ChevronDownIcon,
   CloseIcon,
   MinimizeIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
-  TagIcon,
+  SettingsIcon,
   TrashIcon,
   WindowIcon,
 } from './Icons';
@@ -22,6 +24,7 @@ interface ManagerViewProps {
   groups: Group[];
   tags: Tag[];
   snippets: Snippet[];
+  settings: SettingsPayload;
   creatorRequested: boolean;
   onCreatorHandled: () => void;
   actions: AppActions;
@@ -43,10 +46,12 @@ export default function ManagerView({
   groups,
   tags,
   snippets,
+  settings,
   creatorRequested,
   onCreatorHandled,
   actions,
 }: ManagerViewProps) {
+  const [page, setPage] = useState<'library' | 'settings'>('library');
   const [filter, setFilter] = useState<FilterState>(initialFilter);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [editor, setEditor] = useState<{ snippet: Snippet | null } | null>(null);
@@ -64,6 +69,7 @@ export default function ManagerView({
 
   useEffect(() => {
     if (creatorRequested) {
+      setPage('library');
       setEditor({ snippet: null });
       onCreatorHandled();
     }
@@ -187,12 +193,13 @@ export default function ManagerView({
         className="flex h-10 shrink-0 items-center justify-between border-b border-line bg-surface pl-3.5 pr-1"
       >
         <div className="flex items-center gap-2">
-          <span className="flex h-[18px] w-[18px] items-center justify-center rounded-[4px] bg-brand text-white">
-            <TagIcon className="h-[11px] w-[11px]" />
-          </span>
+          <AppMarkIcon className="h-[18px] w-[18px]" />
           <span className="text-[12.5px] font-semibold tracking-tight">Quick Input</span>
         </div>
         <div className="flex items-center gap-0.5" style={noDragStyle}>
+          <IconButton label="设置" onClick={() => setPage('settings')}>
+            <SettingsIcon className="h-3.5 w-3.5" />
+          </IconButton>
           <IconButton label="悬浮窗预览" onClick={() => void actions.switchToOverlay()}>
             <WindowIcon className="h-3.5 w-3.5" />
           </IconButton>
@@ -205,6 +212,9 @@ export default function ManagerView({
         </div>
       </header>
 
+      {page === 'settings' ? (
+        <SettingsPage hotkey={settings.hotkey} onBack={() => setPage('library')} onSelect={actions.setHotkey} />
+      ) : (
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-[#f7f7f7]">
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
@@ -487,8 +497,9 @@ export default function ManagerView({
           </div>
         </main>
       </div>
+      )}
 
-      {editor ? (
+      {page === 'library' && editor ? (
         <EditorDrawer
           snippet={editor.snippet}
           groups={groups}
@@ -501,7 +512,7 @@ export default function ManagerView({
         />
       ) : null}
 
-      {confirm ? (
+      {page === 'library' && confirm ? (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/25" onMouseDown={() => setConfirm(null)}>
           <div
             role="alertdialog"

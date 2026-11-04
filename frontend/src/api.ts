@@ -11,6 +11,7 @@ interface WailsBridge {
   BatchMoveGroup(snippetIds: number[], groupId: number | null): Promise<void>;
   BatchUpdateTags(snippetIds: number[], addTagIds: number[], removeTagIds: number[]): Promise<void>;
   TriggerPaste(id: number): Promise<void>;
+  SetHotkey(spec: string): Promise<void>;
   HideWindow(): Promise<void>;
   MinimizeWindow(): Promise<void>;
   SwitchToManager(openCreator: boolean): Promise<void>;
@@ -36,6 +37,7 @@ const emptyPayload: BootstrapPayload = {
   tags: [],
   snippets: [],
   windowState: { mode: 'overlay', openCreator: false },
+  settings: { hotkey: 'Alt+Space' },
 };
 
 export function getBootstrapData(): Promise<BootstrapPayload> {
@@ -79,6 +81,11 @@ export function batchUpdateTags(snippetIds: number[], addTagIds: number[], remov
 
 export function triggerPaste(id: number): Promise<void> {
   return bridge()?.TriggerPaste(id) ?? Promise.resolve();
+}
+
+export function setHotkey(spec: string): Promise<void> {
+  const app = bridge();
+  return app ? app.SetHotkey(spec) : Promise.reject(new Error('未连接应用后端'));
 }
 
 export function hideWindow(): Promise<void> {

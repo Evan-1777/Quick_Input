@@ -18,6 +18,7 @@ const (
 	wmHotkey     = 0x0312
 	wmApp        = 0x8000
 	wmTrayIcon   = wmApp + 1
+	wmSetHotkey  = wmApp + 2
 	wmClose      = 0x0010
 	wmDestroy    = 0x0002
 	wmNull       = 0x0000
@@ -25,12 +26,12 @@ const (
 	wmContext    = 0x007B
 	wmLButtonDbl = 0x0203
 
-	modAlt  = 0x0001
-	vkSpace = 0x20
-	vkQ     = 0x51
-	vkMenu  = 0x12
-	vkShift = 0x10
-	vkCtrl  = 0x11
+	modNoRepeat = 0x4000
+	vkMenu      = 0x12
+	vkShift     = 0x10
+	vkCtrl      = 0x11
+	vkLWin      = 0x5B
+	vkRWin      = 0x5C
 
 	swHide     = 0
 	swShow     = 5
@@ -222,6 +223,17 @@ type winBridge struct {
 	hwnd   windows.Handle
 	own    windows.Handle
 	target windows.Handle
+
+	initialHotkey string
+	hotkey        Hotkey
+	hotkeyCallMu  sync.Mutex
+	pendingMu     sync.Mutex
+	pending       *hotkeyRequest
+}
+
+type hotkeyRequest struct {
+	spec string
+	done chan error
 }
 
 var (
@@ -232,8 +244,8 @@ var (
 )
 
 // NewBridge 创建 Windows 原生桥接实现。
-func NewBridge(windowTitle string) Bridge {
-	return &winBridge{title: windowTitle}
+func NewBridge(windowTitle, initialHotkey string) Bridge {
+	return &winBridge{title: windowTitle, initialHotkey: initialHotkey}
 }
 
 // Start 在独立的消息线程上创建消息窗口、注册全局热键与系统托盘。
@@ -289,16 +301,92 @@ func (b *winBridge) initMessageWindow() error {
 	}
 	b.hwnd = windows.Handle(hwnd)
 
-	// 默认 Alt+Space，被占用时回退 Alt+Q；两者都失败仍保留托盘入口。
-	if ok, _, _ := procRegisterHotKey.Call(hwnd, hotkeyID, modAlt, vkSpace); ok == 0 {
-		if ok, _, _ := procRegisterHotKey.Call(hwnd, hotkeyID, modAlt, vkQ); ok == 0 {
-			_, _, _ = procRegisterHotKey.Call(hwnd, hotkeyID, modAlt, vkSpace)
-		}
-	}
+	// 按持久化组合注册，失败时依次回退到默认组合；全部失败仍保留托盘入口。
+	b.registerInitialHotkey()
 	if err := b.addTrayIcon(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// registerInitialHotkey 在消息线程内完成启动注册，只记录首个成功的组合。
+func (b *winBridge) registerInitialHotkey() {
+	for _, spec := range hotkeyFallbacks(b.initialHotkey) {
+		h, err := ParseHotkey(spec)
+		if err != nil {
+			continue
+		}
+		mods := h.Modifiers | modNoRepeat
+		if ok, _, _ := procRegisterHotKey.Call(uintptr(b.hwnd), hotkeyID, uintptr(mods), uintptr(h.Key)); ok != 0 {
+			b.hotkey = h
+			return
+		}
+	}
+}
+
+// SetHotkey 请求消息线程重新注册全局热键，并等待其回传结果。
+func (b *winBridge) SetHotkey(spec string) error {
+	h, err := ParseHotkey(spec)
+	if err != nil {
+		return err
+	}
+	hwnd := b.hwnd
+	if hwnd == 0 {
+		return errors.New("平台层未就绪")
+	}
+
+	b.hotkeyCallMu.Lock()
+	defer b.hotkeyCallMu.Unlock()
+
+	req := &hotkeyRequest{spec: h.String(), done: make(chan error, 1)}
+	b.pendingMu.Lock()
+	b.pending = req
+	b.pendingMu.Unlock()
+
+	// RegisterHotKey 与 WM_HOTKEY 具有线程队列亲和性，注册只能在消息线程执行。
+	if ok, _, callErr := procPostMessageW.Call(uintptr(hwnd), wmSetHotkey, 0, 0); ok == 0 {
+		b.pendingMu.Lock()
+		b.pending = nil
+		b.pendingMu.Unlock()
+		return fmt.Errorf("投递快捷键切换消息失败: %v", callErr)
+	}
+
+	select {
+	case err := <-req.done:
+		return err
+	case <-time.After(2 * time.Second):
+		return errors.New("切换快捷键超时")
+	}
+}
+
+// applyPendingHotkey 在消息线程内注销旧组合并注册新组合；失败时恢复旧组合。
+func (b *winBridge) applyPendingHotkey() {
+	b.pendingMu.Lock()
+	req := b.pending
+	b.pending = nil
+	b.pendingMu.Unlock()
+	if req == nil {
+		return
+	}
+
+	h, err := ParseHotkey(req.spec)
+	if err != nil {
+		req.done <- err
+		return
+	}
+
+	prev := b.hotkey
+	procUnregisterHotKey.Call(uintptr(b.hwnd), hotkeyID)
+	if ok, _, _ := procRegisterHotKey.Call(uintptr(b.hwnd), hotkeyID, uintptr(h.Modifiers|modNoRepeat), uintptr(h.Key)); ok == 0 {
+		if prev.Key != 0 {
+			procRegisterHotKey.Call(uintptr(b.hwnd), hotkeyID, uintptr(prev.Modifiers|modNoRepeat), uintptr(prev.Key))
+		}
+		req.done <- fmt.Errorf("快捷键 %s 注册失败，可能已被其他程序占用", h.String())
+		return
+	}
+
+	b.hotkey = h
+	req.done <- nil
 }
 
 func (b *winBridge) addTrayIcon() error {
@@ -364,6 +452,11 @@ func wndProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintpt
 					go b.cb.OnTrayOpenManager()
 				}
 			}
+		}
+		return 0
+	case wmSetHotkey:
+		if b != nil {
+			b.applyPendingHotkey()
 		}
 		return 0
 	case wmClose:
@@ -681,9 +774,13 @@ func waitUntil(timeout time.Duration, done func() bool) {
 
 func waitModifiersReleased(timeout time.Duration) {
 	released := func() bool {
+		ctrl, _, _ := procGetAsyncKeyState.Call(vkCtrl)
 		alt, _, _ := procGetAsyncKeyState.Call(vkMenu)
 		shift, _, _ := procGetAsyncKeyState.Call(vkShift)
-		return alt&0x8000 == 0 && shift&0x8000 == 0
+		lwin, _, _ := procGetAsyncKeyState.Call(vkLWin)
+		rwin, _, _ := procGetAsyncKeyState.Call(vkRWin)
+		const down = 0x8000
+		return ctrl&down == 0 && alt&down == 0 && shift&down == 0 && lwin&down == 0 && rwin&down == 0
 	}
 	waitUntil(timeout, released)
 }

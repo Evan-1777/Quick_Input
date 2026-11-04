@@ -226,6 +226,32 @@ func TestDeleteCleanup(t *testing.T) {
 	}
 }
 
+func TestSettingsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+
+	value, err := s.GetSetting(SettingHotkey)
+	if err != nil {
+		t.Fatalf("读取未设置项: %v", err)
+	}
+	if value != "" {
+		t.Fatalf("未设置项 = %q, want 空串", value)
+	}
+
+	if err := s.SetSetting(SettingHotkey, "Alt+Space"); err != nil {
+		t.Fatalf("写入设置: %v", err)
+	}
+	if value, err = s.GetSetting(SettingHotkey); err != nil || value != "Alt+Space" {
+		t.Fatalf("读取设置 = %q, %v", value, err)
+	}
+
+	if err := s.SetSetting(SettingHotkey, "Ctrl+Shift+Q"); err != nil {
+		t.Fatalf("覆盖设置: %v", err)
+	}
+	if value, err = s.GetSetting(SettingHotkey); err != nil || value != "Ctrl+Shift+Q" {
+		t.Fatalf("覆盖后读取设置 = %q, %v", value, err)
+	}
+}
+
 func mustGroup(t *testing.T, s *Store, name string) Group {
 	t.Helper()
 	g, err := s.SaveGroup(0, name)
