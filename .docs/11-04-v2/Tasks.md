@@ -1,6 +1,9 @@
 # Tasks：Quick Input 0.1.0 首次发布
 
 **关联 Plan**：`Plan.md` —— Quick Input 0.1.0 首次发布 v1.0  
+**状态**：DONE  
+**完成日期**：2026-11-04  
+**回归测试结论**：前端 7/7 用例与生产构建通过；后端 3 个包测试通过，Linux 与 Windows 交叉 `go vet` 零错误；`v0.1.0` 标签构建成功并发布 Release（`quick-input.exe` 15,575,552 字节）。  
 **总计 Task**：9 个
 
 ---
@@ -9,7 +12,7 @@
 
 ### TASK-001：创建 .gitignore 排除依赖与产物
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：无
@@ -25,7 +28,7 @@
 
 ### TASK-002：在 wails.json 声明 0.1.0 版本元数据
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：无
@@ -39,7 +42,7 @@
 
 ### TASK-003：为构建工作流增加标签触发与 Release 任务
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：无
@@ -55,7 +58,7 @@
 
 ### TASK-004：本地回归验证
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：TASK-001, TASK-003
@@ -69,7 +72,7 @@
 
 ### TASK-005：初始化 Git 仓库并创建首个提交
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：TASK-002, TASK-004
@@ -87,7 +90,7 @@
 
 ### TASK-006：创建公开 GitHub 仓库并推送 main
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：TASK-005
@@ -101,7 +104,7 @@
 
 ### TASK-007：确认 main 推送触发 CI 构建成功
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：TASK-006
@@ -114,7 +117,7 @@
 
 ### TASK-008：创建并推送 v0.1.0 标签完成发布
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends On**：TASK-007
@@ -129,7 +132,7 @@
 
 ### TASK-009：验收 Release 资产并同步项目文档
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P1
 - **Depends On**：TASK-008

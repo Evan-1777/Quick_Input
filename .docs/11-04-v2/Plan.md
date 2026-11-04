@@ -1,9 +1,9 @@
 # Plan：Quick Input 0.1.0 首次发布
 
-**状态**：IN_PROGRESS  
+**状态**：DONE  
 **日期**：2026-11-04  
 **版本**：v1.0  
-**回归测试结论**：待发布流水线验收后回填。
+**回归测试结论**：2026-11-04 通过 —— 本地前端 `npm test` 7/7、`npm run build`（含 `tsc --noEmit`）通过；后端 `go test ./internal/...` 全绿、`go vet ./internal/...` 与 `GOOS=windows GOARCH=amd64 go vet ./...` 零错误。云端 `windows-latest` 构建成功，`v0.1.0` Release 已发布，`quick-input.exe` 资产大小 15,575,552 字节。
 
 ---
 
