@@ -87,5 +87,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release create "$TAG" dist/quick-input.exe \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Quick Input $TAG" \
             --notes "首个公开版本：全局热键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置；系统托盘常驻，支持批量管理与分类维护。下载后直接运行，需要 Windows 11 x64。"
