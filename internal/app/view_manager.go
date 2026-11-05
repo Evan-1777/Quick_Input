@@ -47,6 +47,7 @@ func (a *App) appBar(c *ui.Context, t *ui.Theme, p mdPalette) {
 		if settings.Clicked() {
 			if a.lib.page == pageSettings {
 				a.lib.page = pageList
+				a.lib.err = ""
 			} else {
 				a.ShowSettings()
 			}

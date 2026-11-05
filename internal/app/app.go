@@ -246,6 +246,7 @@ func (a *App) ShowManager(create bool) {
 // ShowSettings switches the manager to the settings subpage.
 func (a *App) ShowSettings() {
 	a.lib.page = pageSettings
+	a.lib.err = ""
 	a.editor = nil
 	if a.manager != nil {
 		a.manager.Show()

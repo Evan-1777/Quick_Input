@@ -39,11 +39,13 @@ func (p *winPaster) Paste(text string) error {
 		return errors.New("待键入文本为空")
 	}
 	if p.target != 0 {
-		procSetForegroundWindow.Call(uintptr(p.target))
-		waitUntil(100*time.Millisecond, func() bool {
-			hwnd, _, _ := procGetForegroundWindow.Call()
-			return windows.Handle(hwnd) == p.target
-		})
+		if ok, _, _ := procIsWindow.Call(uintptr(p.target)); ok != 0 {
+			procSetForegroundWindow.Call(uintptr(p.target))
+			waitUntil(100*time.Millisecond, func() bool {
+				hwnd, _, _ := procGetForegroundWindow.Call()
+				return windows.Handle(hwnd) == p.target
+			})
+		}
 	}
 
 	waitModifiersReleased(300 * time.Millisecond)

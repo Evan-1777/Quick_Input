@@ -133,3 +133,78 @@ func TestSetHotkeyRollback(t *testing.T) {
 		t.Fatalf("failed switch changed state: %q/%q", fx.app.hotkey, fx.app.saved)
 	}
 }
+
+func TestManagerSidebarCRUD(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	if err := tt.Click("新建分组"); err != nil {
+		t.Fatalf("click 新建分组: %v", err)
+	}
+	tt.Type("项目")
+	tt.Key(0, ui.KeyEnter)
+	if !tt.HasText("项目") {
+		t.Fatalf("new group missing: %v", tt.Texts())
+	}
+
+	rect, ok := tt.Find("项目")
+	if !ok {
+		t.Fatalf("group text not found: %v", tt.Texts())
+	}
+	tt.Move(rect.X+rect.W/2, rect.Y+rect.H/2)
+	tt.Frame()
+	if err := tt.Click("重命名分组"); err != nil {
+		t.Fatalf("click 重命名分组: %v", err)
+	}
+	tt.Command("selectAll")
+	tt.Type("项目改")
+	tt.Key(0, ui.KeyEnter)
+	if !tt.HasText("项目改") {
+		t.Fatalf("renamed group missing: %v", tt.Texts())
+	}
+
+	rect, ok = tt.Find("项目改")
+	if !ok {
+		t.Fatalf("renamed group text not found: %v", tt.Texts())
+	}
+	tt.Move(rect.X+rect.W/2, rect.Y+rect.H/2)
+	tt.Frame()
+	if err := tt.Click("删除分组"); err != nil {
+		t.Fatalf("click 删除分组: %v", err)
+	}
+	if !tt.HasText("「项目改」下的预设文本将变为未分组，且不可撤销。") {
+		t.Fatalf("group confirmation missing: %v", tt.Texts())
+	}
+	if err := tt.Click("删除"); err != nil {
+		t.Fatalf("confirm group delete: %v", err)
+	}
+	if tt.HasText("项目改") {
+		t.Fatalf("group still present: %v", tt.Texts())
+	}
+
+	if err := tt.Click("新建标签"); err != nil {
+		t.Fatalf("click 新建标签: %v", err)
+	}
+	tt.Type("临时")
+	tt.Key(0, ui.KeyEnter)
+	if !tt.HasText("临时") {
+		t.Fatalf("new tag missing: %v", tt.Texts())
+	}
+	rect, ok = tt.Find("临时")
+	if !ok {
+		t.Fatalf("tag text not found: %v", tt.Texts())
+	}
+	tt.Move(rect.X+rect.W/2, rect.Y+rect.H/2)
+	tt.Frame()
+	if err := tt.Click("删除标签"); err != nil {
+		t.Fatalf("click 删除标签: %v", err)
+	}
+	if err := tt.Click("删除"); err != nil {
+		t.Fatalf("confirm tag delete: %v", err)
+	}
+	if tt.HasText("临时") {
+		t.Fatalf("tag still present: %v", tt.Texts())
+	}
+}

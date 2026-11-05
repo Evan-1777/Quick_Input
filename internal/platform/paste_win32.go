@@ -30,6 +30,7 @@ var (
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 	procGetForegroundWindow    = user32.NewProc("GetForegroundWindow")
+	procIsWindow               = user32.NewProc("IsWindow")
 	procSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
 	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
 	procGetAsyncKeyState       = user32.NewProc("GetAsyncKeyState")
