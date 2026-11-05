@@ -1,240 +1,429 @@
-// Package app 编排存储层与平台层，向前端暴露 Wails 绑定方法。
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"sort"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"quick-input/internal/platform"
 	"quick-input/internal/store"
 )
 
-// EventWindowMode 是窗口模式切换事件名。
-const EventWindowMode = "window:mode"
-
-// WindowStatePayload 是前端切换视图所需的窗口状态。
-type WindowStatePayload struct {
-	Mode        string `json:"mode"`
-	OpenCreator bool   `json:"openCreator"`
+// Shortcuts is the global shortcut registry the app drives.
+type Shortcuts interface {
+	Register(spec string, fn func()) error
+	Unregister(spec string)
 }
 
-// SettingsPayload 是全局配置。
-type SettingsPayload struct {
-	Hotkey string `json:"hotkey"`
+type mygoShortcuts struct{}
+
+func (mygoShortcuts) Register(spec string, fn func()) error {
+	return mygo.GlobalShortcut.Register(spec, fn)
+}
+func (mygoShortcuts) Unregister(spec string) { mygo.GlobalShortcut.Unregister(spec) }
+
+// NewShortcuts returns the real MyGo shortcut registry.
+func NewShortcuts() Shortcuts { return mygoShortcuts{} }
+
+type page int
+
+const (
+	pageList page = iota
+	pageSettings
+)
+
+// overlayState is the quick panel's model. Handles and list state live here,
+// never elements.
+type overlayState struct {
+	filter  FilterState
+	chosen  int
+	visible bool
+	list    ui.ListState
+	search  ui.Handle
 }
 
-// BootstrapPayload 是前端初始化所需的全部数据。
-type BootstrapPayload struct {
-	Groups      []store.Group      `json:"groups"`
-	Tags        []store.Tag        `json:"tags"`
-	Snippets    []store.Snippet    `json:"snippets"`
-	WindowState WindowStatePayload `json:"windowState"`
-	Settings    SettingsPayload    `json:"settings"`
+// libraryState is the manager's model.
+type libraryState struct {
+	filter FilterState
+	chosen ui.Selection[int64]
+	list   ui.ListState
+	page   page
+
+	err string
+
+	addingKind  string // "group" or "tag"
+	addingValue string
+
+	renamingKind  string
+	renamingID    int64
+	renamingValue string
+
+	confirm *confirmState
 }
 
-// App 是 Wails 绑定服务。
+type confirmState struct {
+	title   string
+	message string
+	run     func()
+}
+
+// editorState is the side sheet's draft. It is replaced as a whole when the
+// sheet opens so a failed save keeps every field.
+type editorState struct {
+	id      int64
+	title   string
+	content string
+	groupID *int64
+	tagIDs  []int64
+	newTag  string
+	err     string
+}
+
+// App owns the store, the platform paster and both window views.
 type App struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	store  *store.Store
-	bridge platform.Bridge
-	state  WindowStatePayload
-	shown  bool
+	store     *store.Store
+	paster    platform.Paster
+	shortcuts Shortcuts
 
-	emit func(eventName string, data any)
+	panel   *mygo.Window
+	manager *mygo.Window
+
+	groups   []store.Group
+	tags     []store.Tag
+	snippets []store.Snippet
+
+	// hotkey is what the OS registered; saved is what the settings page
+	// shows. A failed startup fallback keeps them apart, as before.
+	hotkey string
+	saved  string
+
+	overlay overlayState
+	lib     libraryState
+	editor  *editorState
 }
 
-// NewApp 构造绑定服务；emit 默认丢弃事件，Startup 时替换为 Wails 运行时实现。
-func NewApp(st *store.Store, bridge platform.Bridge) *App {
-	return &App{
-		store:  st,
-		bridge: bridge,
-		state:  WindowStatePayload{Mode: platform.ModeOverlay},
-		emit:   func(string, any) {},
+// New builds the app model. Windows are injected later by Attach.
+func New(st *store.Store, paster platform.Paster, shortcuts Shortcuts) *App {
+	if shortcuts == nil {
+		shortcuts = NewShortcuts()
 	}
+	a := &App{store: st, paster: paster, shortcuts: shortcuts}
+	a.lib.filter.Scope = scopeAll
+	a.overlay.filter.Scope = scopeAll
+	return a
 }
 
-// AttachContext 绑定 Wails 运行时上下文；作为包级函数而非方法，避免被暴露为前端绑定。
-func AttachContext(a *App, ctx context.Context) {
-	a.ctx = ctx
-	a.emit = func(eventName string, data any) {
-		runtime.EventsEmit(ctx, eventName, data)
-	}
+// SetStartupHotkey records the combination that actually registered and the
+// persisted one shown in settings.
+func (a *App) SetStartupHotkey(registered, saved string) {
+	a.hotkey, a.saved = registered, saved
 }
 
-// ToggleOverlay 处理全局热键：悬浮窗已展示时收起，否则在光标处唤出。
-func (a *App) ToggleOverlay() {
-	a.mu.Lock()
-	visible, mode := a.shown, a.state.Mode
-	a.mu.Unlock()
-
-	if visible && mode == platform.ModeOverlay {
-		a.HideWindow()
-		return
-	}
-	a.SwitchToOverlay()
+// RegisterHotkey registers spec for toggling the overlay.
+func (a *App) RegisterHotkey(spec string) error {
+	return a.shortcuts.Register(spec, a.ToggleOverlay)
 }
 
-// SwitchToOverlay 在光标处展示快捷悬浮窗。
-func (a *App) SwitchToOverlay() {
-	a.bridge.ShowOverlayAtCursor(platform.OverlayLogicalWidth, platform.OverlayLogicalHeight)
-	a.applyState(WindowStatePayload{Mode: platform.ModeOverlay})
+// Attach injects the windows. Both may be nil in tests.
+func (a *App) Attach(panel, manager *mygo.Window) {
+	a.panel, a.manager = panel, manager
 }
 
-// SwitchToManager 展示主管理窗口，按需直接展开新建表单。
-func (a *App) SwitchToManager(openCreator bool) {
-	a.bridge.ShowManagerWindow(platform.ManagerLogicalWidth, platform.ManagerLogicalHeight)
-	a.applyState(WindowStatePayload{Mode: platform.ModeManager, OpenCreator: openCreator})
-}
-
-// HideWindow 隐藏当前窗口。
-func (a *App) HideWindow() {
-	a.bridge.HideWindow()
-	a.mu.Lock()
-	a.shown = false
-	a.mu.Unlock()
-}
-
-// MinimizeWindow 最小化当前窗口。
-func (a *App) MinimizeWindow() {
-	a.bridge.MinimizeWindow()
-	a.mu.Lock()
-	a.shown = false
-	a.mu.Unlock()
-}
-
-// Quit 退出应用（由托盘菜单调用）。
-func (a *App) Quit() {
-	if a.ctx != nil {
-		runtime.Quit(a.ctx)
-	}
-}
-
-// GetBootstrapData 返回前端初始化数据与当前窗口状态。
-func (a *App) GetBootstrapData() (BootstrapPayload, error) {
+// Reload replaces every snapshot from SQLite and prunes stale filters.
+func (a *App) Reload() error {
 	groups, err := a.store.ListGroups()
 	if err != nil {
-		return BootstrapPayload{}, err
+		return err
 	}
 	tags, err := a.store.ListTags()
 	if err != nil {
-		return BootstrapPayload{}, err
+		return err
 	}
-	snippets, err := a.store.ListSnippets(store.SnippetFilter{GroupScope: "all"})
+	snippets, err := a.store.ListSnippets(store.SnippetFilter{GroupScope: scopeAll})
 	if err != nil {
-		return BootstrapPayload{}, err
+		return err
 	}
-	hotkey, err := a.store.GetSetting(store.SettingHotkey)
-	if err != nil {
-		return BootstrapPayload{}, err
-	}
-	if hotkey == "" {
-		hotkey = platform.DefaultHotkey
-	}
-
-	a.mu.Lock()
-	state := a.state
-	a.mu.Unlock()
-
-	return BootstrapPayload{
-		Groups:      groups,
-		Tags:        tags,
-		Snippets:    snippets,
-		WindowState: state,
-		Settings:    SettingsPayload{Hotkey: hotkey},
-	}, nil
+	a.groups, a.tags, a.snippets = groups, tags, snippets
+	pruneFilter(&a.overlay.filter, groups, tags)
+	pruneFilter(&a.lib.filter, groups, tags)
+	a.pruneSelection()
+	return nil
 }
 
-// SetHotkey 切换全局唤出快捷键：注册成功后持久化，写库失败时回滚注册。
-func (a *App) SetHotkey(spec string) error {
-	prev, err := a.store.GetSetting(store.SettingHotkey)
-	if err != nil {
-		return err
+func (a *App) reload() {
+	if err := a.Reload(); err != nil {
+		a.lib.err = err.Error()
 	}
-	if prev == "" {
-		prev = platform.DefaultHotkey
-	}
+}
 
-	h, err := platform.ParseHotkey(spec)
+func (a *App) pruneSelection() {
+	if a.lib.chosen.Len() == 0 {
+		return
+	}
+	exists := make(map[int64]bool, len(a.snippets))
+	for _, snippet := range a.snippets {
+		exists[snippet.ID] = true
+	}
+	var stale []int64
+	for id := range a.lib.chosen.All() {
+		if !exists[id] {
+			stale = append(stale, id)
+		}
+	}
+	for _, id := range stale {
+		a.lib.chosen.Remove(id)
+	}
+}
+
+func (a *App) filteredSnippets(f FilterState) []store.Snippet {
+	return filterSnippets(a.snippets, f)
+}
+
+func (a *App) groupByID(id int64) (store.Group, bool) {
+	for _, group := range a.groups {
+		if group.ID == id {
+			return group, true
+		}
+	}
+	return store.Group{}, false
+}
+
+// ShowOverlay snapshots the target, reloads, resets the panel and places it
+// on the display under the pointer: horizontally centered, a third down.
+func (a *App) ShowOverlay() {
+	a.paster.CaptureTarget()
+	a.reload()
+	a.resetOverlay()
+	a.overlay.visible = true
+	if a.panel == nil {
+		return
+	}
+	display := mygo.Screen.DisplayNearestPoint(mygo.Screen.CursorScreenPoint())
+	width, height := a.panel.Size()
+	work := display.WorkArea
+	a.panel.SetPosition(work.X+(work.Width-width)/2, work.Y+(work.Height-height)/3)
+	a.panel.Show()
+	a.panel.Focus()
+	a.overlay.search.Focus()
+}
+
+// HideOverlay hides the quick panel.
+func (a *App) HideOverlay() {
+	a.overlay.visible = false
+	if a.panel != nil {
+		a.panel.Hide()
+	}
+}
+
+// ToggleOverlay shows or hides the quick panel.
+func (a *App) ToggleOverlay() {
+	if a.panel != nil && a.panel.IsVisible() {
+		a.HideOverlay()
+		return
+	}
+	a.ShowOverlay()
+}
+
+// ShowManager opens the manager, optionally straight into a new snippet.
+func (a *App) ShowManager(create bool) {
+	a.reload()
+	a.lib.page = pageList
+	if create {
+		a.openEditor(nil)
+	} else {
+		a.editor = nil
+	}
+	if a.manager == nil {
+		return
+	}
+	a.manager.Show()
+	a.manager.Focus()
+}
+
+// ShowSettings switches the manager to the settings subpage.
+func (a *App) ShowSettings() {
+	a.lib.page = pageSettings
+	a.editor = nil
+	if a.manager != nil {
+		a.manager.Show()
+		a.manager.Focus()
+	}
+}
+
+func (a *App) resetOverlay() {
+	a.overlay.filter = FilterState{Scope: scopeAll}
+	a.overlay.chosen = 0
+	a.overlay.list.ScrollTo(0, ui.Start)
+}
+
+// insert hides the panel, then pastes the snippet's latest content in the
+// background so the UI thread is never blocked by focus waits.
+func (a *App) insert(id int64) {
+	snippet, err := a.store.GetSnippetByID(id)
 	if err != nil {
-		return err
+		a.overlay.visible = false
+		return
 	}
-	if err := a.bridge.SetHotkey(h.String()); err != nil {
-		return err
+	a.HideOverlay()
+	paste := func() {
+		if err := a.paster.Paste(snippet.Content); err != nil {
+			mygo.RunOnMain(func() {
+				a.lib.err = err.Error()
+				if a.manager != nil {
+					a.manager.Invalidate()
+				}
+			})
+		}
 	}
-	if err := a.store.SetSetting(store.SettingHotkey, h.String()); err != nil {
-		if rollbackErr := a.bridge.SetHotkey(prev); rollbackErr != nil {
-			return fmt.Errorf("保存设置失败且无法恢复原快捷键: %w", errors.Join(err, rollbackErr))
+	if a.panel == nil {
+		paste()
+		return
+	}
+	go paste()
+}
+
+// SetHotkey registers the new combination first, then persists it. A save
+// failure rolls the registration back, leaving the old combination active.
+func (a *App) SetHotkey(spec string) error {
+	if spec == a.hotkey {
+		if spec == a.saved {
+			return nil
+		}
+		if err := a.store.SetSetting(store.SettingHotkey, spec); err != nil {
+			return fmt.Errorf("保存设置失败: %w", err)
+		}
+		a.saved = spec
+		return nil
+	}
+	if err := a.shortcuts.Register(spec, a.ToggleOverlay); err != nil {
+		return fmt.Errorf("快捷键 %s 注册失败，可能已被其他程序占用", spec)
+	}
+	if err := a.store.SetSetting(store.SettingHotkey, spec); err != nil {
+		a.shortcuts.Unregister(spec)
+		var rollback error
+		if a.hotkey != "" {
+			rollback = a.shortcuts.Register(a.hotkey, a.ToggleOverlay)
+		}
+		if rollback != nil {
+			return fmt.Errorf("保存设置失败且无法恢复原快捷键: %w", errors.Join(err, rollback))
 		}
 		return fmt.Errorf("保存设置失败，已恢复原快捷键: %w", err)
 	}
+	old := a.hotkey
+	a.hotkey, a.saved = spec, spec
+	if old != "" && old != spec {
+		a.shortcuts.Unregister(old)
+	}
 	return nil
 }
 
-// SaveSnippet 新建或编辑预设文本。
-func (a *App) SaveSnippet(in store.SnippetInput) (store.Snippet, error) {
-	return a.store.SaveSnippet(in)
-}
-
-// DeleteSnippets 批量删除预设文本。
-func (a *App) DeleteSnippets(ids []int64) error {
-	return a.store.DeleteSnippets(ids)
-}
-
-// SaveGroup 新建或重命名分组。
-func (a *App) SaveGroup(id int64, name string) (store.Group, error) {
-	return a.store.SaveGroup(id, name)
-}
-
-// DeleteGroup 删除分组并将其下文本重置为未分组。
-func (a *App) DeleteGroup(id int64) error {
-	return a.store.DeleteGroup(id)
-}
-
-// SaveTag 新建或重命名标签。
-func (a *App) SaveTag(id int64, name string) (store.Tag, error) {
-	return a.store.SaveTag(id, name)
-}
-
-// DeleteTag 删除标签并解绑关联文本。
-func (a *App) DeleteTag(id int64) error {
-	return a.store.DeleteTag(id)
-}
-
-// BatchMoveGroup 批量移动分组。
-func (a *App) BatchMoveGroup(snippetIDs []int64, groupID *int64) error {
-	return a.store.BatchMoveGroup(snippetIDs, groupID)
-}
-
-// BatchUpdateTags 批量绑定与解绑标签。
-func (a *App) BatchUpdateTags(snippetIDs []int64, addTagIDs []int64, removeTagIDs []int64) error {
-	return a.store.BatchUpdateTags(snippetIDs, addTagIDs, removeTagIDs)
-}
-
-// TriggerPaste 从存储读取最新文本并键入到唤出前的目标窗口。
-func (a *App) TriggerPaste(snippetID int64) error {
-	snippet, err := a.store.GetSnippetByID(snippetID)
+func (a *App) saveSnippet(in store.SnippetInput) error {
+	_, err := a.store.SaveSnippet(in)
 	if err != nil {
 		return err
 	}
-	if err := a.bridge.PasteTextToTarget(snippet.Content); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	a.shown = false
-	a.mu.Unlock()
+	a.reload()
 	return nil
 }
 
-func (a *App) applyState(state WindowStatePayload) {
-	a.mu.Lock()
-	a.state = state
-	a.shown = true
-	a.mu.Unlock()
+func (a *App) deleteSnippets(ids []int64) error {
+	if err := a.store.DeleteSnippets(ids); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		a.lib.chosen.Remove(id)
+	}
+	a.reload()
+	return nil
+}
 
-	a.emit(EventWindowMode, state)
+func (a *App) saveGroup(id int64, name string) error {
+	if _, err := a.store.SaveGroup(id, name); err != nil {
+		return err
+	}
+	a.reload()
+	return nil
+}
+
+func (a *App) deleteGroup(id int64) error {
+	if err := a.store.DeleteGroup(id); err != nil {
+		return err
+	}
+	if a.lib.filter.Scope == scopeGroup && a.lib.filter.GroupID != nil && *a.lib.filter.GroupID == id {
+		a.lib.filter = FilterState{Scope: scopeAll}
+	}
+	a.reload()
+	return nil
+}
+
+func (a *App) saveTag(id int64, name string) error {
+	if _, err := a.store.SaveTag(id, name); err != nil {
+		return err
+	}
+	a.reload()
+	return nil
+}
+
+func (a *App) deleteTag(id int64) error {
+	if err := a.store.DeleteTag(id); err != nil {
+		return err
+	}
+	a.lib.filter.TagIDs = removeID(a.lib.filter.TagIDs, id)
+	a.overlay.filter.TagIDs = removeID(a.overlay.filter.TagIDs, id)
+	a.reload()
+	return nil
+}
+
+func (a *App) moveSnippets(ids []int64, groupID *int64) error {
+	if err := a.store.BatchMoveGroup(ids, groupID); err != nil {
+		return err
+	}
+	a.reload()
+	return nil
+}
+
+func (a *App) updateTags(ids []int64, add, remove []int64) error {
+	if err := a.store.BatchUpdateTags(ids, add, remove); err != nil {
+		return err
+	}
+	a.reload()
+	return nil
+}
+
+func removeID(ids []int64, id int64) []int64 {
+	result := ids[:0]
+	for _, existing := range ids {
+		if existing != id {
+			result = append(result, existing)
+		}
+	}
+	return result
+}
+
+// openEditor starts a draft for a snippet, or a new one when snippet is nil.
+func (a *App) openEditor(snippet *store.Snippet) {
+	draft := &editorState{}
+	if snippet != nil {
+		draft.id = snippet.ID
+		draft.title = snippet.Title
+		draft.content = snippet.Content
+		draft.groupID = snippet.GroupID
+		for _, tag := range snippet.Tags {
+			draft.tagIDs = append(draft.tagIDs, tag.ID)
+		}
+	}
+	a.editor = draft
+}
+
+// chosenIDs returns the current multi-selection in a stable order.
+func (a *App) chosenIDs() []int64 {
+	ids := make([]int64, 0, a.lib.chosen.Len())
+	for id := range a.lib.chosen.All() {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }

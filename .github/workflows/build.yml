@@ -22,39 +22,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Test frontend
-        working-directory: frontend
-        run: npm test
-
-      - name: Type check and build frontend
-        working-directory: frontend
-        run: npm run build
-
-      - name: Test backend
+      - name: Test
         run: go test ./...
 
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      - name: Vet
+        run: go vet ./...
+
+      - name: MyGo vet
+        run: go tool mygo vet
 
       - name: Build Windows binary
-        run: wails build -platform windows/amd64 -o quick-input.exe
+        run: go tool mygo build -platform windows/amd64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: quick-input-windows-amd64
-          path: build/bin/quick-input.exe
+          path: build/windows-amd64/Quick Input.exe
           if-no-files-found: error
 
       - name: Publish acceptance checklist
@@ -62,11 +46,13 @@ jobs:
         run: |
           @'
           ### Windows 11 验收核对
-          - [ ] 双击 quick-input.exe 唤醒已运行实例并打开管理窗口
-          - [ ] Alt+Space 唤出悬浮窗，再按一次收起；焦点回到原应用
-          - [ ] 托盘右键菜单可新建预设文本、打开管理窗口与退出
-          - [ ] 选中文本后粘贴到原输入框，剪贴板文本恢复（期间未复制新内容）
-          - [ ] 125% / 150% 缩放下悬浮窗不越出显示器工作区
+          - [ ] 双击 Quick Input.exe 唤醒已运行实例并打开管理窗口
+          - [ ] 快捷键唤出悬浮窗，再按一次收起；焦点回到原应用
+          - [ ] 设置页切换唤出快捷键后立即生效，重启后保持；被占用时保留原组合并提示
+          - [ ] 托盘右键菜单可新建预设文本、打开管理窗口与退出，退出可结束进程
+          - [ ] 选中预设文本后粘贴到原输入框，剪贴板文本恢复（期间未复制新内容）
+          - [ ] 搜索、分组单选、标签多选交集与上下键循环选择正确
+          - [ ] 100% / 125% / 150% 缩放下悬浮窗居中于光标所在显示器且不越界
           - [ ] 批量移入分组、批量增删标签、删除前二次确认均生效
           '@ >> $env:GITHUB_STEP_SUMMARY
 
@@ -86,7 +72,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/quick-input.exe \
+          gh release create "$TAG" "dist/Quick Input.exe" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Quick Input $TAG" \
             --notes "首个公开版本：全局热键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置；系统托盘常驻，支持批量管理与分类维护。下载后直接运行，需要 Windows 11 x64。"

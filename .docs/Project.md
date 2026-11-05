@@ -5,92 +5,100 @@
 ## 概述
 
 - **定位**：Windows 11 个人桌面效率工具，全局快捷键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置，常驻系统托盘并提供批量管理界面。
-- **阶段**：v0.1.0 已发布，等待 Windows 11 实机验收
+- **阶段**：v0.2.0 已完成 MyGo 原生 UI 重构与紧凑 MD3 改版，等待 Windows 11 实机验收
 - **非目标**：跨平台发行、多用户同步、富文本或图片剪贴板备份、云存储（详见 `SCOPE.md`）
 
 ## 环境与运行
 
 - **开发平台**：WSL Linux x86_64；产物目标 Windows 11 x64
-- **工具链**：Go 1.26、Node.js 24、Wails CLI v2.16.0
-- **后端依赖**：`github.com/wailsapp/wails/v2 v2.16.0`、`modernc.org/sqlite v1.60.1`、`golang.org/x/sys v0.48.0`（见 `go.mod`）
-- **前端依赖**：React 18.3.1、TypeScript 5.6.3、Vite 5.4.11、TailwindCSS 3.4.17，版本锁定于 `frontend/package.json`
+- **工具链**：Go 1.27.3、MyGo v0.7.4（`go.mod` 的 `tool` 指令提供 `go tool mygo`）；不再需要 Node.js、前端构建或 Wails CLI
+- **依赖**：`github.com/egoist/mygo v0.7.4`、`modernc.org/sqlite v1.60.1`、`golang.org/x/sys v0.48.0`（见 `go.mod`）
 - **本地验证**：
-  - `go test -v ./internal/...` 与 `go vet ./internal/...`
-  - `cd frontend && npm test && npx tsc --noEmit && npm run build`
-  - `GOOS=windows GOARCH=amd64 go vet ./...`（全量包交叉静态检查）
-- **产物构建**：仅由 `.github/workflows/build.yml` 在 `windows-latest` 执行 `wails build`，本机不构建 Windows 产物
-- ★ 根包 `main.go` 依赖 Wails Linux 图形绑定（GTK/WebKit），WSL 下无法编译；本地仅实测 `internal/` 包，根包用 Windows 交叉检查与链接构建验证
-- ★ `main.go` 通过 `//go:embed all:frontend/dist` 嵌入前端；执行任何 Go 侧检查前必须先 `npm run build`
+  - `go test ./...`
+  - `go vet ./...`
+  - `go tool mygo vet`（无包参数，在项目根执行）
+  - `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...`
+  - `go run .` 可在本机 GTK3 下启动；无 GPU 时 MyGo 自动退回 CPU 渲染
+- **产物构建**：仅由 `.github/workflows/build.yml` 在 `windows-latest` 执行 `go tool mygo build -platform windows/amd64`，输出 `build/windows-amd64/Quick Input.exe`；本机不生成发布产物
+- ★ 本机 Wayland 会话下全局热键依赖桌面 portal 与已安装的桌面条目、托盘依赖 `libayatana-appindicator3`，二者不作为本地验收项，以 Windows 实机为准
+- ★ `mygo.json` 固定应用名、标识符、版本、图标与输出目录；图标源为 `build/appicon.png`
 - ★ 数据库默认路径 `%APPDATA%\QuickInput\quick_input.db`；单元测试使用 `:memory:`，不触碰真实数据
-- ★ CI 首包需 `build/appicon.png`；`build/windows/` 下的图标、清单与版本信息由 Wails 构建时自动生成
+- ★ 托盘图标由 `main.go` 在运行时绘制 32×32 PNG，与应用标识同源，不引入额外位图资源
 
 ## 结构
 
 ```
 quick-input/
-├─ main.go                      # 单实例窗口选项、托盘/热键回调接线、数据库路径
-├─ wails.json                   # Wails 构建与前端目录配置
+├─ main.go                      # MyGo 生命周期、双窗口、托盘、热键回退、数据库路径与托盘图标
+├─ mygo.json                    # MyGo 构建配置（名称/标识/版本/图标/输出）
 ├─ build/appicon.png            # 应用图标源文件
-├─ build/appicon.svg            # 矢量图标源文件（界面使用独立 24 视图简化标识）
 ├─ internal/
 │  ├─ store/store.go            # SQLite 连接、建表、CRUD、过滤查询、批量事务与键值设置
-│  ├─ platform/platform.go      # Bridge 接口、窗口尺寸常量、DPI 换算与工作区裁剪纯函数
-│  ├─ platform/platform_windows.go  # Win32 热键/托盘/光标/焦点/剪贴板粘贴实现
-│  ├─ platform/platform_stub.go     # 非 Windows 内存桩，供本地开发运行
-│  └─ app/app.go                # Wails 绑定方法与窗口模式事件编排
-├─ frontend/
-│  ├─ src/App.tsx               # 单一数据源容器，双视图切换与事件订阅
-│  ├─ src/filter.ts             # 纯函数：多维过滤、键盘导航、多选切换
-│  ├─ src/api.ts                # window.go / window.runtime 封装与空态兜底
-│  ├─ src/components/QuickOverlay.tsx  # 快捷悬浮窗
-│  ├─ src/components/ManagerView.tsx   # 主管理窗口、批量操作、分类管理
-│  ├─ src/components/SettingsPage.tsx  # 二级设置页、唤出快捷键单选
-│  ├─ src/components/EditorDrawer.tsx  # 新建/编辑抽屉
-│  └─ src/components/ui.tsx     # 复用按钮与图标按钮
+│  ├─ platform/
+│  │  ├─ platform.go            # Paster 接口与剪贴板恢复判定
+│  │  ├─ paste_windows.go       # Win32 前台快照、剪贴板替换与 Ctrl+V 合成
+│  │  ├─ paste_win32.go         # 键入所需的 Win32 声明与助手（仅 windows）
+│  │  └─ paste_stub.go          # 非 Windows 空实现
+│  └─ app/
+│     ├─ app.go                 # 应用状态、窗口编排、CRUD、快捷键切换、插入链路
+│     ├─ filter.go              # 纯函数：关键字/分组/标签过滤、循环索引、多选切换
+│     ├─ theme.go               # MD3 紧凑色板、形状 token、每帧主题接线
+│     ├─ icons.go               # 内联 SVG 图标与应用标识
+│     ├─ widgets.go             # 图标按钮、pill 按钮、chip、kbd chip 等样板助手
+│     ├─ view_overlay.go        # 560×380 悬浮检索面板
+│     ├─ view_manager.go        # 管理窗口、侧栏、列表、批量栏、确认框
+│     ├─ view_editor.go         # 新建/编辑侧边页
+│     └─ view_settings.go       # 设置子页与快捷键切换
 └─ .github/workflows/build.yml  # Windows 云端构建、测试与产物上传
 ```
 
-- **数据流**：热键/托盘 → `platform.Bridge` 原生消息 → `app.App` 回调 → `window:mode` 事件 → React 切换视图；写入路径 React → `api.ts` → `App` 绑定方法 → `store` → SQLite，随后重新拉取 bootstrap 数据；键入路径 `App.TriggerPaste` → `store.GetSnippetByID` 读取最新内容 → `platform.PasteTextToTarget`。
-- **设置数据流**：Bootstrap 携带 `settings.hotkey` → 设置页单选 → `App.SetHotkey` 校验并规范化 → 消息线程重注册热键 → 写入 `settings` 表 → 前端刷新 Bootstrap；任一步失败保持原组合与原设置。
-- **依赖方向**：`frontend → app → store / platform`；`store` 与 `platform` 互不依赖，`platform` 不感知业务模型。平台差异通过 `//go:build windows` 与 `//go:build !windows` 隔离。
+- **数据流**：热键/托盘 → MyGo 回调 → `App.ShowOverlay` / `App.ShowManager` → 原生视图；写入路径为视图 → `App` 数据方法 → `store` → SQLite → `Reload` 刷新快照；键入路径为 `App.insert` → 隐藏面板 → 后台读取内容并 `platform.Paster.Paste`。
+- **无 IPC**：原生视图直接读取 `App` 的内存快照，不再有 Wails 绑定或前端事件通道。
+- **设置数据流**：设置页点击组合 → `App.SetHotkey` 先注册新组合 → 写 `settings` 表 → 注销旧组合；任一步失败保留原组合并在卡片内展示中文错误。设置页展示持久化值 `saved`，实际注册值 `hotkey` 只用于注册与回滚。
+- **依赖方向**：`main → app → store / platform`；`store` 与 `platform` 互不依赖，`platform` 不感知业务模型；视图与状态同在 `app` 包。
 
 ## 约定
 
-- **命名**：Go 导出类型 PascalCase，内部函数 camelCase；TS 组件 PascalCase，纯函数 camelCase
+- **命名**：Go 导出类型 PascalCase，内部函数 camelCase；视图方法 `OverlayView` / `ManagerView`
 - **语言**：界面文案、错误信息与提交信息用中文；代码标识符用英文
-- **单一数据源**：前端只缓存后端返回的 bootstrap 数据，任何写操作完成后刷新全量数据，不在前端维护第二份状态或 `localStorage`
-- **纯函数**：过滤、键盘导航与多选切换集中在 `filter.ts`，组件直接复用，不重复实现
-- **快捷键**：以规范字符串（`Ctrl+Alt+Shift+Win+Key` 顺序）在 `settings` 表持久化；解析与格式化集中在 `platform.ParseHotkey` / `Hotkey.String()`，前后端只交换该格式
-- **破坏性操作**：删除预设文本、分组、标签前必须二次确认
-- **错误处理**：存储层以 `ErrDuplicateName`、`ErrInvalidInput` 区分可展示错误，绑定层原样返回，界面在操作区就地展示
+- **单一数据源**：视图只读取 `App` 的内存快照，任何写操作完成后 `Reload` 全量刷新；不在视图或全局变量中维护第二份业务状态
+- **纯函数**：过滤、循环索引与多选切换集中在 `filter.go`，视图直接复用
+- **过滤语义**：关键字先 `TrimSpace` 再小写，与 `Title+"\n"+Content` 的小写结果做包含匹配；分组单选；标签取交集；store 的过滤参数保持既有契约
+- **UI 状态**：跨帧只保存 `ui.Handle`、`ui.ListState`、`ui.Selection` 与普通字段，禁止在 `App` 中保存 `ui.Element`
+- **主题**：色值只出现在 `theme.go`；每个视图根调用 `useMD3(c)` 重建主题；容器 12、输入 8、chip 6、按钮 pill、侧边页 16
+- **图标**：界面图标全部为内联 SVG，仅图标按钮必须提供 `Label` 与 `Tooltip`
+- **破坏性操作**：删除预设文本、分组、标签前必须经 `ui.AlertDialog` 二次确认
+- **错误处理**：存储层以 `ErrDuplicateName`、`ErrInvalidInput` 区分可展示错误，视图在错误条或侧边页底部就地展示
 
 ## 约束与决策
 
-- 2026-11-04 单实例无边框窗口 + 前端自定义拖拽标题栏，不启用第二个窗口——避免双 WebView2 进程与运行期切换系统边框导致的重绘错位
-- 2026-11-04 全局热键默认 `Alt+Space`，被占用时回退 `Alt+Q`，失败仍保留托盘入口
-- 2026-11-04 唤出快捷键支持设置页单选预设组合（`Alt+Space`、`Alt+Q`、`Ctrl+Alt+Space`、`Ctrl+Alt+Q`、`Ctrl+Shift+Space`、`Ctrl+Shift+Q`）；注册只发生在消息线程，切换经自定义窗口消息投递
-- 2026-11-04 快捷键切换先注册新组合、成功后才写库；注册失败保留旧组合，写库失败回滚注册，界面就地展示中文错误
-- 2026-11-04 已知限制：启动时持久化组合被占用则回退至 `Alt+Space` / `Alt+Q`，设置页仍显示保存值，不做额外状态通道
-- 2026-11-04 键入采用「隐藏自身 → 恢复目标窗口焦点 → 等待修饰键释放 → 剪贴板替换 + 合成 Ctrl+V → 150ms 后校验序列号还原」；只备份 `CF_UNICODETEXT`，非文本格式（图片、文件列表）不恢复
-- 2026-11-04 显式设置目标窗口快照仅在当前前台非本进程窗口时更新，避免悬浮窗自身被记录为目标
-- 2026-11-04 平台层统一在物理像素空间计算位置与尺寸，`GetGUIThreadInfo` 失败或光标矩形为空时回退鼠标坐标
-- 2026-11-04 SQLite 使用纯 Go 驱动、单连接池并在 DSN 开启 `foreign_keys`，保证 `:memory:` 与文件库行为一致；分组删除在事务内将 `group_id` 置空，标签删除级联清理关联表
-- 2026-11-04 UIPI 边界：普通权限进程无法向管理员权限窗口注入按键；需向提权窗口键入时必须以同等权限运行本工具
-- 2026-11-04 本地不做 Windows 全量构建；`wails build` 与安装包验收走云端 CI，本机只跑内部包测试与交叉静态检查
-- 2026-11-04 发布以 `v*` 标签为唯一入口：`main` 推送触发构建，标签推送创建 Release；`frontend/dist`、`build/bin` 与本地 Agent 配置不入库
+- 2026-11-05 双窗口：`Panel: true` 的无边框悬浮面板 + 系统标题栏管理窗口，不启用运行期切换窗口模式的单窗口方案
+- 2026-11-05 生命周期固定为 `RequestSingleInstanceLock → SetName → SetActivationPolicy → WhenReady{建窗口/Attach/注册热键/托盘} → App.Run`；MyGo 的窗口、托盘与全局快捷键必须在应用 ready 后创建
+- 2026-11-05 退出用 `quitting` 标志：托盘退出置位后 `App.Quit`；两个窗口的 `OnClose` 仅在未退出时 `PreventDefault + Hide`，避免拦截退出
+- 2026-11-05 面板定位取光标所在显示器工作区：水平居中、纵向 1/3；不跟随输入光标，混合 DPI 由用户实机验收
+- 2026-11-05 面板键盘只有一条路径：搜索框保持焦点，上下键在输入控件的 `OnTextKey` 中循环移动，Enter 取 `Submitted`，Esc 依次清关键字 → 清筛选 → 隐藏；列表不参与键盘
+- 2026-11-05 搜索栏使用自绘输入行而非 `ui.SearchField`，以便在输入控件内接管上下键并保持唯一按键路径；占位文案为中文
+- 2026-11-05 键入：唤出时 `CaptureTarget`（排除本进程窗口）→ 隐藏面板 → 恢复目标焦点 → 等待修饰键释放 → 剪贴板备份/替换 → 合成 Ctrl+V → 150ms 后序列号未变才还原；只恢复 `CF_UNICODETEXT`
+- 2026-11-05 全局快捷键直接使用 MyGo accelerator 字符串，持久化预设原文；注册失败按保存值 → `Alt+Space` → `Alt+Q` 回退，全部失败仍保留托盘入口
+- 2026-11-05 主题为紧凑 MD3 tonal surface：`surface` / `surface-container-low` / `-high` 表达层级，侧边页与确认框叠 scrim；每帧重建以跟随系统明暗
+- 2026-11-05 管理列表最多展示 3 枚归属 chip（分组 + 标签），避免长标签挤占标题
+- 2026-11-05 本地不做 Windows 运行验收；`go tool mygo build` 与安装包由云端 CI 生成
+- 2026-11-05 发布以 `v*` 标签为唯一入口：`main` 推送触发构建，标签推送创建 Release；`build/windows-*` 不入库
+- 2026-11-05 已知限制：启动时持久化组合被占用则回退并仍显示保存值；UIPI 下无法向管理员窗口键入；Linux 开发会话的热键与托盘能力受桌面环境限制
 
 ## 外部集成
 
-- **GitHub Actions**：公开仓库 `Evan-1777/Quick_Input`；`main` 推送在 `windows-latest` 构建 `quick-input.exe` 并上传为构建产物，`v*` 标签额外创建 GitHub Release 并附加可执行文件；无运行时外部服务，不含任何密钥或凭据
+- **GitHub Actions**：公开仓库 `Evan-1777/Quick_Input`；`main` 推送在 `windows-latest` 执行测试与 `go tool mygo build` 并上传 `Quick Input.exe`，`v*` 标签额外创建 GitHub Release；无运行时外部服务，不含任何密钥或凭据
 
 ## 术语
 
 - **预设文本（snippet）**：可被检索并键入的一段纯文本，归属至多一个分组、可绑定多个标签
-- **悬浮窗（overlay）**：快捷键唤出的 `560×380` 快捷检索面板，失焦自动收起
-- **管理窗口（manager）**：`960×640` 主管理视图，含批量操作与分类管理
+- **悬浮面板（overlay）**：快捷键唤出的 `560×380` 检索面板，失焦自动收起
+- **管理窗口（manager）**：`960×640` 主管理视图，含侧栏、批量操作与分类管理
 - **设置页**：管理窗口内的二级子页面，承载唤出快捷键等低频全局配置
-- **唤出快捷键**：从任意应用唤出悬浮窗的全局组合键，可在设置页切换并持久化
-- **目标窗口**：唤出悬浮窗前快照记录的前台窗口句柄，键入前恢复其焦点
+- **侧边页（side sheet）**：覆盖管理窗口右侧的 `420` 宽新建/编辑表单
+- **唤出快捷键**：从任意应用唤出悬浮面板的全局组合键，可在设置页切换并持久化
+- **目标窗口**：唤出面板前快照记录的前台窗口句柄，键入前恢复其焦点
 - **未分组**：`group_id IS NULL` 的预设文本
 
 ## 维护
