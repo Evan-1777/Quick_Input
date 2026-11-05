@@ -75,4 +75,4 @@ jobs:
           gh release create "$TAG" "dist/Quick Input.exe" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Quick Input $TAG" \
-            --notes "首个公开版本：全局热键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置；系统托盘常驻，支持批量管理与分类维护。下载后直接运行，需要 Windows 11 x64。"
+            --notes "0.2.0：前端重构为 MyGo 原生 UI 与紧凑 Material 3 风格，不再依赖 WebView；新增设置页可切换唤出快捷键并持久化，注册失败时回退并提示；键入前校验目标窗口。全局热键唤出悬浮面板，按分组与标签检索预设文本并直接键入原输入位置；系统托盘常驻，支持批量管理与分类维护。下载后直接运行，需要 Windows 11 x64。"
