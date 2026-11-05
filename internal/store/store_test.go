@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -250,6 +252,155 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if value, err = s.GetSetting(SettingHotkey); err != nil || value != "Ctrl+Shift+Q" {
 		t.Fatalf("覆盖后读取设置 = %q, %v", value, err)
 	}
+}
+
+func TestSnippetPositionMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quick_input.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("打开旧库: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE snippets (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		content TEXT NOT NULL,
+		group_id INTEGER,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("建旧版 snippets: %v", err)
+	}
+	old := []struct{ title, updatedAt string }{
+		{"oldest", "2026-01-01T00:00:00Z"},
+		{"middle", "2026-01-02T00:00:00Z"},
+		{"newest", "2026-01-03T00:00:00Z"},
+	}
+	for _, row := range old {
+		if _, err := db.Exec(`INSERT INTO snippets (title, content, group_id, updated_at) VALUES (?, ?, NULL, ?)`,
+			row.title, row.title, row.updatedAt); err != nil {
+			t.Fatalf("插入旧记录: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭旧库: %v", err)
+	}
+
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("迁移旧库: %v", err)
+	}
+	defer s.Close()
+
+	if got := snippetTitles(t, s); strings.Join(got, ",") != "newest,middle,oldest" {
+		t.Fatalf("迁移后顺序 = %v, want [newest middle oldest]", got)
+	}
+
+	rows, err := s.db.Query(`SELECT position FROM snippets ORDER BY position`)
+	if err != nil {
+		t.Fatalf("读取 position: %v", err)
+	}
+	defer rows.Close()
+	var positions []int
+	for rows.Next() {
+		var position int
+		if err := rows.Scan(&position); err != nil {
+			t.Fatalf("扫描 position: %v", err)
+		}
+		positions = append(positions, position)
+	}
+	if len(positions) != 3 || positions[0] != 0 || positions[1] != 1 || positions[2] != 2 {
+		t.Fatalf("回填 position = %v, want [0 1 2]", positions)
+	}
+}
+
+func TestSnippetOrderingAndReorder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quick_input.db")
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	a := mustSnippet(t, s, SnippetInput{Title: "A", Content: "a"})
+	b := mustSnippet(t, s, SnippetInput{Title: "B", Content: "b"})
+
+	expect := func(name string, want ...string) {
+		t.Helper()
+		if got := snippetTitles(t, s); strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s: 顺序 = %v, want %v", name, got, want)
+		}
+	}
+
+	expect("新建置顶", "B", "A")
+	if _, err := s.SaveSnippet(SnippetInput{ID: a.ID, Title: "A2", Content: "a"}); err != nil {
+		t.Fatalf("编辑 A: %v", err)
+	}
+	expect("编辑不移动", "B", "A2")
+
+	if err := s.ReorderSnippets([]int64{a.ID}, &b.ID); err != nil {
+		t.Fatalf("A 到 B 前: %v", err)
+	}
+	expect("单条移到首行之前", "A2", "B")
+
+	if err := s.ReorderSnippets([]int64{b.ID}, &a.ID); err != nil {
+		t.Fatalf("B 到 A 前: %v", err)
+	}
+	expect("单条移到中间", "B", "A2")
+
+	if err := s.ReorderSnippets([]int64{a.ID}, nil); err != nil {
+		t.Fatalf("A 到末尾: %v", err)
+	}
+	expect("nil 锚点落末尾", "B", "A2")
+
+	unknown := int64(9999)
+	if err := s.ReorderSnippets([]int64{b.ID}, &unknown); err != nil {
+		t.Fatalf("未知锚点: %v", err)
+	}
+	expect("未知锚点落末尾", "A2", "B")
+
+	if err := s.ReorderSnippets(nil, &a.ID); err != nil {
+		t.Fatalf("空 ids: %v", err)
+	}
+	expect("空 ids 不改顺序", "A2", "B")
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("关闭库: %v", err)
+	}
+	reopened, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("重新打开库: %v", err)
+	}
+	defer reopened.Close()
+	if got := snippetTitles(t, reopened); strings.Join(got, ",") != "A2,B" {
+		t.Fatalf("重启后顺序 = %v, want [A2 B]", got)
+	}
+}
+
+func TestReorderSnippetsMultipleIDs(t *testing.T) {
+	s := newTestStore(t)
+	a := mustSnippet(t, s, SnippetInput{Title: "A", Content: "a"})
+	b := mustSnippet(t, s, SnippetInput{Title: "B", Content: "b"})
+	c := mustSnippet(t, s, SnippetInput{Title: "C", Content: "c"})
+	if got := snippetTitles(t, s); strings.Join(got, ",") != "C,B,A" {
+		t.Fatalf("初始顺序 = %v, want [C B A]", got)
+	}
+
+	if err := s.ReorderSnippets([]int64{a.ID, c.ID}, &b.ID); err != nil {
+		t.Fatalf("多 id 重排: %v", err)
+	}
+	if got := snippetTitles(t, s); strings.Join(got, ",") != "A,C,B" {
+		t.Fatalf("多 id 重排后 = %v, want [A C B]", got)
+	}
+}
+
+func snippetTitles(t *testing.T, s *Store) []string {
+	t.Helper()
+	items, err := s.ListSnippets(SnippetFilter{GroupScope: "all"})
+	if err != nil {
+		t.Fatalf("ListSnippets: %v", err)
+	}
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	return titles
 }
 
 func mustGroup(t *testing.T, s *Store, name string) Group {

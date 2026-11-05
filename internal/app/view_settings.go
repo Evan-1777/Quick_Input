@@ -28,10 +28,30 @@ func (a *App) settingsView(c *ui.Context, t *ui.Theme, p mdPalette) {
 					for i, spec := range hotkeyOptions {
 						a.hotkeyRow(c, t, p, spec, i == len(hotkeyOptions)-1)
 					}
-					if a.lib.err != "" {
-						ui.Text(c, a.lib.err).FontSize(11).TextColor(p.Error).Padding(10, 16).Wrap()
-					}
 				})
+
+				ui.Text(c, "快捷面板").FontSize(12).Bold()
+				panelCard := ui.Column(c).Radius(radiusCard).Background(p.SurfaceLow).
+					Border(1, p.OutlineVariant).Clip()
+				panelCard.Children(func() {
+					row := ui.Row(c).Height(48).Padding(0, 16).Gap(8)
+					row.Children(func() {
+						ui.Text(c, "显示未分组").FontSize(12).Grow(1)
+						on := a.showUngrouped
+						sw := ui.Switch(c, &on).Label("显示未分组开关")
+						if sw.Changed() {
+							if err := a.SetShowUngrouped(on); err != nil {
+								a.lib.err = err.Error()
+							} else {
+								a.lib.err = ""
+							}
+						}
+					})
+				})
+
+				if a.lib.err != "" {
+					ui.Text(c, a.lib.err).FontSize(11).TextColor(p.Error).Wrap()
+				}
 			})
 		})
 	})

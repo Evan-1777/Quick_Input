@@ -7,6 +7,127 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestManagerReorderSnippets(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	mixed, ok := tt.Find("Mixed")
+	if !ok {
+		t.Fatalf("Mixed not found: %v", tt.Texts())
+	}
+	farewell, ok := tt.Find("Farewell")
+	if !ok {
+		t.Fatalf("Farewell not found: %v", tt.Texts())
+	}
+	dragRow(tt, farewell.X+farewell.W/2, farewell.Y+farewell.H/2, mixed.X+mixed.W/2, mixed.Y+2)
+
+	if fx.app.editor != nil {
+		t.Fatal("拖动不应打开编辑侧边页")
+	}
+	if got := appTitles(fx.app); strings.Join(got, ",") != "Farewell,Mixed,Ungrouped,Greeting" {
+		t.Fatalf("拖动后顺序 = %v, want [Farewell Mixed Ungrouped Greeting]", got)
+	}
+}
+
+func TestManagerReorderWithinFilter(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	fx.app.lib.filter = FilterState{Scope: scopeGroup, GroupID: &fx.groupA}
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	mixed, ok := tt.Find("Mixed")
+	if !ok {
+		t.Fatalf("Mixed not found: %v", tt.Texts())
+	}
+	greeting, ok := tt.Find("Greeting")
+	if !ok {
+		t.Fatalf("Greeting not found: %v", tt.Texts())
+	}
+	dragRow(tt, greeting.X+greeting.W/2, greeting.Y+greeting.H/2, mixed.X+mixed.W/2, mixed.Y+2)
+
+	if got := appTitles(fx.app); strings.Join(got, ",") != "Greeting,Mixed,Ungrouped,Farewell" {
+		t.Fatalf("过滤视图拖动后顺序 = %v, want [Greeting Mixed Ungrouped Farewell]", got)
+	}
+
+	tt = ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+	greeting, ok = tt.Find("Greeting")
+	mixed, ok2 := tt.Find("Mixed")
+	if !ok || !ok2 || greeting.Y >= mixed.Y {
+		t.Fatalf("过滤视图可见顺序错误: Greeting=%v Mixed=%v", greeting, mixed)
+	}
+}
+
+func TestManagerReorderMultipleSelection(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	if err := tt.Click("Mixed"); err != nil {
+		t.Fatalf("click Mixed: %v", err)
+	}
+	if err := tt.ClickWith(ui.Cmd, "Greeting"); err != nil {
+		t.Fatalf("cmd click Greeting: %v", err)
+	}
+	if fx.app.lib.chosen.Len() != 2 {
+		t.Fatalf("选中数量 = %d, want 2", fx.app.lib.chosen.Len())
+	}
+
+	mixed, ok := tt.Find("Mixed")
+	if !ok {
+		t.Fatalf("Mixed not found: %v", tt.Texts())
+	}
+	farewell, ok := tt.Find("Farewell")
+	if !ok {
+		t.Fatalf("Farewell not found: %v", tt.Texts())
+	}
+	dragRow(tt, mixed.X+mixed.W/2, mixed.Y+mixed.H/2, farewell.X+farewell.W/2, farewell.Y+2)
+
+	if got := appTitles(fx.app); strings.Join(got, ",") != "Ungrouped,Mixed,Greeting,Farewell" {
+		t.Fatalf("多选拖动后顺序 = %v, want [Ungrouped Mixed Greeting Farewell]", got)
+	}
+	if fx.app.lib.chosen.Len() != 2 {
+		t.Fatalf("拖动后选中数量 = %d, want 2", fx.app.lib.chosen.Len())
+	}
+}
+
+func TestManagerReorderStoreError(t *testing.T) {
+	fx := newFixture(t)
+	before := strings.Join(appTitles(fx.app), ",")
+	if err := fx.app.store.Close(); err != nil {
+		t.Fatalf("关闭 store: %v", err)
+	}
+	fx.app.reorderSnippets(fx.app.snippets, []int{0}, 2)
+
+	if fx.app.lib.err == "" {
+		t.Fatal("写库失败应写入错误条")
+	}
+	if got := strings.Join(appTitles(fx.app), ","); got != before {
+		t.Fatalf("写库失败改变了内存顺序: %v, want %v", got, before)
+	}
+}
+
+func appTitles(a *App) []string {
+	titles := make([]string, 0, len(a.snippets))
+	for _, snippet := range a.snippets {
+		titles = append(titles, snippet.Title)
+	}
+	return titles
+}
+
+func dragRow(tt *ui.Tester, fromX, fromY, toX, toY float32) {
+	tt.Press(fromX, fromY)
+	for k := 1; k <= 4; k++ {
+		f := float32(k) / 4
+		tt.Move(fromX+(toX-fromX)*f, fromY+(toY-fromY)*f)
+	}
+	tt.Release(toX, toY)
+}
+
 func TestManagerCreateEditDelete(t *testing.T) {
 	fx := newFixture(t)
 	fx.app.ShowManager(false)
@@ -120,6 +241,32 @@ func TestManagerFiltersAndSettings(t *testing.T) {
 	}
 	if fx.app.lib.err != "" {
 		t.Fatalf("clicking the current hotkey set an error: %q", fx.app.lib.err)
+	}
+}
+
+func TestSettingsShowUngrouped(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	if err := tt.Click("设置"); err != nil {
+		t.Fatalf("click 设置: %v", err)
+	}
+	if !tt.HasText("显示未分组") {
+		t.Fatalf("设置页缺少显示未分组: %v", tt.Texts())
+	}
+	if err := tt.Click("显示未分组开关"); err != nil {
+		t.Fatalf("click 显示未分组开关: %v", err)
+	}
+	if !fx.app.showUngrouped {
+		t.Fatal("点击后开关未开启")
+	}
+	if err := tt.Click("显示未分组开关"); err != nil {
+		t.Fatalf("再次 click 显示未分组开关: %v", err)
+	}
+	if fx.app.showUngrouped {
+		t.Fatal("再次点击后开关未关闭")
 	}
 }
 

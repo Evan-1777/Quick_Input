@@ -49,6 +49,92 @@ func filterSnippets(snippets []store.Snippet, f FilterState) []store.Snippet {
 	return result
 }
 
+// groupedOnly keeps the snippets that belong to a group, in their order.
+func groupedOnly(snippets []store.Snippet) []store.Snippet {
+	result := make([]store.Snippet, 0, len(snippets))
+	for _, snippet := range snippets {
+		if snippet.GroupID != nil {
+			result = append(result, snippet)
+		}
+	}
+	return result
+}
+
+// groupSteps is the panel's [ / ] cycle: all, ungrouped when shown, then
+// every group in the sidebar's order.
+func groupSteps(groups []store.Group, ungrouped bool) []FilterState {
+	steps := []FilterState{{Scope: scopeAll}}
+	if ungrouped {
+		steps = append(steps, FilterState{Scope: scopeUngrouped})
+	}
+	for i := range groups {
+		steps = append(steps, FilterState{Scope: scopeGroup, GroupID: &groups[i].ID})
+	}
+	return steps
+}
+
+// cycleGroup moves the filter one step around steps, keeping the keyword
+// and tags. The step is clamped to one group per call so several brackets
+// in one frame, or repeated keys, cannot overshoot.
+func cycleGroup(f FilterState, steps []FilterState, step int) FilterState {
+	if f.Scope == "" {
+		f.Scope = scopeAll
+	}
+	switch {
+	case step < 0:
+		step = -1
+	case step > 0:
+		step = 1
+	default:
+		return f
+	}
+	if len(steps) == 0 {
+		return f
+	}
+	current := 0
+	for i, candidate := range steps {
+		if candidate.Scope != f.Scope {
+			continue
+		}
+		if f.Scope == scopeGroup {
+			if candidate.GroupID == nil || f.GroupID == nil || *candidate.GroupID != *f.GroupID {
+				continue
+			}
+		}
+		current = i
+		break
+	}
+	target := steps[nextIndex(current, len(steps), step)]
+	f.Scope = target.Scope
+	f.GroupID = nil
+	if target.Scope == scopeGroup && target.GroupID != nil {
+		id := *target.GroupID
+		f.GroupID = &id
+	}
+	return f
+}
+
+// splitBrackets removes every bracket and counts the net direction: [
+// steps back, ] steps forward. Brackets cannot be searched for.
+func splitBrackets(keyword string) (string, int) {
+	if !strings.ContainsAny(keyword, "[]") {
+		return keyword, 0
+	}
+	step := 0
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '[':
+			step--
+		case ']':
+			step++
+		default:
+			return r
+		}
+		return -1
+	}, keyword)
+	return cleaned, step
+}
+
 // nextIndex wraps a list index in either direction.
 func nextIndex(current, total, step int) int {
 	if total <= 0 {

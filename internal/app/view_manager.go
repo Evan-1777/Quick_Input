@@ -246,6 +246,7 @@ func (a *App) libraryMain(c *ui.Context, t *ui.Theme, p mdPalette) {
 	a.lib.list.Key = func(i int) any { return items[i].ID }
 	a.lib.list.Label = func(i int) string { return items[i].Title }
 	a.lib.list.Selection = &a.lib.chosen
+	a.lib.list.Reorder = func(rows []int, to int) { a.reorderSnippets(items, rows, to) }
 
 	main := ui.Column(c).Grow(1).FillHeight()
 	main.Children(func() {

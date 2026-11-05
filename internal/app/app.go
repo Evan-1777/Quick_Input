@@ -95,6 +95,10 @@ type App struct {
 	tags     []store.Tag
 	snippets []store.Snippet
 
+	// showUngrouped keeps ungrouped snippets in the quick panel's list and
+	// group cycle. The manager always shows them.
+	showUngrouped bool
+
 	// hotkey is what the OS registered; saved is what the settings page
 	// shows. A failed startup fallback keeps them apart, as before.
 	hotkey string
@@ -113,7 +117,28 @@ func New(st *store.Store, paster platform.Paster, shortcuts Shortcuts) *App {
 	a := &App{store: st, paster: paster, shortcuts: shortcuts}
 	a.lib.filter.Scope = scopeAll
 	a.overlay.filter.Scope = scopeAll
+	if value, err := st.GetSetting(store.SettingOverlayShowUngrouped); err == nil && value == "1" {
+		a.showUngrouped = true
+	}
 	return a
+}
+
+// SetShowUngrouped persists the panel's ungrouped preference, then updates
+// the in-memory value. Turning it off while the panel filters ungrouped
+// resets that filter, which would otherwise hide every row.
+func (a *App) SetShowUngrouped(show bool) error {
+	value := "0"
+	if show {
+		value = "1"
+	}
+	if err := a.store.SetSetting(store.SettingOverlayShowUngrouped, value); err != nil {
+		return fmt.Errorf("保存设置失败: %w", err)
+	}
+	a.showUngrouped = show
+	if !show && a.overlay.filter.Scope == scopeUngrouped {
+		a.overlay.filter = FilterState{Scope: scopeAll}
+	}
+	return nil
 }
 
 // SetStartupHotkey records the combination that actually registered and the
@@ -180,6 +205,37 @@ func (a *App) pruneSelection() {
 
 func (a *App) filteredSnippets(f FilterState) []store.Snippet {
 	return filterSnippets(a.snippets, f)
+}
+
+// reorderSnippets moves rows to before the first visible row from to on
+// that is not moving; no such row puts them at the end. Hidden rows keep
+// their relative order around the visible anchor.
+func (a *App) reorderSnippets(items []store.Snippet, rows []int, to int) {
+	if len(rows) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(rows))
+	moving := make(map[int64]bool, len(rows))
+	for _, row := range rows {
+		if row < 0 || row >= len(items) {
+			return
+		}
+		ids = append(ids, items[row].ID)
+		moving[items[row].ID] = true
+	}
+	var before *int64
+	for i := max(to, 0); i < len(items); i++ {
+		if !moving[items[i].ID] {
+			id := items[i].ID
+			before = &id
+			break
+		}
+	}
+	if err := a.store.ReorderSnippets(ids, before); err != nil {
+		a.lib.err = err.Error()
+		return
+	}
+	a.reload()
 }
 
 func (a *App) groupByID(id int64) (store.Group, bool) {

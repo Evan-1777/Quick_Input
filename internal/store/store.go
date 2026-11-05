@@ -24,6 +24,9 @@ var (
 // SettingHotkey 是全局唤出快捷键的设置键。
 const SettingHotkey = "hotkey"
 
+// SettingOverlayShowUngrouped 是快捷面板是否展示未分组预设文本的设置键。
+const SettingOverlayShowUngrouped = "overlay_show_ungrouped"
+
 // Group 是预设文本的单选归属分组，Name 全库唯一。
 type Group struct {
 	ID        int64  `json:"id"`
@@ -87,7 +90,8 @@ var schema = []string{
 		title TEXT NOT NULL,
 		content TEXT NOT NULL,
 		group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
-		updated_at TEXT NOT NULL
+		updated_at TEXT NOT NULL,
+		position INTEGER NOT NULL DEFAULT 0
 	)`,
 	`CREATE TABLE IF NOT EXISTS snippet_tags (
 		snippet_id INTEGER NOT NULL REFERENCES snippets(id) ON DELETE CASCADE,
@@ -128,7 +132,79 @@ func NewStore(dbPath string) (*Store, error) {
 			return nil, fmt.Errorf("初始化表结构: %w", err)
 		}
 	}
+	if err := ensureSnippetPosition(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("初始化表结构: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// ensureSnippetPosition adds the manual-order column to a library created
+// before it existed, backfilling the old display order in one transaction.
+// The column's presence is the migration marker. The pragma rows are closed
+// before the transaction starts: the store runs a single connection.
+func ensureSnippetPosition(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(snippets)`)
+	if err != nil {
+		return err
+	}
+	hasPosition := false
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, typ        string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "position" {
+			hasPosition = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if hasPosition {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`ALTER TABLE snippets ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	ordered, err := tx.Query(`SELECT id FROM snippets ORDER BY updated_at DESC, id DESC`)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for ordered.Next() {
+		var id int64
+		if err := ordered.Scan(&id); err != nil {
+			ordered.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := ordered.Err(); err != nil {
+		ordered.Close()
+		return err
+	}
+	ordered.Close()
+	for position, id := range ids {
+		if _, err := tx.Exec(`UPDATE snippets SET position = ? WHERE id = ?`, position, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Close 关闭数据库连接。
@@ -331,7 +407,7 @@ func (s *Store) ListSnippets(f SnippetFilter) ([]Snippet, error) {
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY s.updated_at DESC, s.id DESC"
+	query += " ORDER BY s.position, s.id"
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -416,8 +492,14 @@ func (s *Store) SaveSnippet(in SnippetInput) (Snippet, error) {
 			return Snippet{}, sql.ErrNoRows
 		}
 	} else {
-		res, err := tx.Exec(`INSERT INTO snippets (title, content, group_id, updated_at) VALUES (?, ?, ?, ?)`,
-			title, in.Content, in.GroupID, now())
+		// New snippets go above the current top: MIN - 1 keeps the old
+		// "newest first" habit without touching anyone else's position.
+		var position int64
+		if err := tx.QueryRow(`SELECT COALESCE(MIN(position), 0) - 1 FROM snippets`).Scan(&position); err != nil {
+			return Snippet{}, err
+		}
+		res, err := tx.Exec(`INSERT INTO snippets (title, content, group_id, updated_at, position) VALUES (?, ?, ?, ?, ?)`,
+			title, in.Content, in.GroupID, now(), position)
 		if err != nil {
 			return Snippet{}, mapErr(err)
 		}
@@ -458,6 +540,74 @@ func (s *Store) DeleteSnippets(ids []int64) error {
 	}
 	if _, err := tx.Exec(stmt, args...); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+// ReorderSnippets moves ids in front of before (nil: to the end) and
+// renumbers every position 0..n-1 in one transaction. Renumbering writes
+// the whole table: fine at personal-library scale, and the upgrade path is
+// spaced positions if a large library ever makes the write amplification
+// matter.
+func (s *Store) ReorderSnippets(ids []int64, before *int64) error {
+	ids = uniqueIDs(ids)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT id FROM snippets ORDER BY position, id`)
+	if err != nil {
+		return err
+	}
+	var all []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	moving := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		moving[id] = true
+	}
+	rest := make([]int64, 0, len(all))
+	for _, id := range all {
+		if !moving[id] {
+			rest = append(rest, id)
+		}
+	}
+	at := len(rest)
+	if before != nil {
+		for i, id := range rest {
+			if id == *before {
+				at = i
+				break
+			}
+		}
+	}
+
+	final := make([]int64, 0, len(all))
+	final = append(final, rest[:at]...)
+	final = append(final, ids...)
+	final = append(final, rest[at:]...)
+	for position, id := range final {
+		if _, err := tx.Exec(`UPDATE snippets SET position = ? WHERE id = ?`, position, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

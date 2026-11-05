@@ -14,7 +14,14 @@ import (
 func (a *App) OverlayView(c *ui.Context) {
 	t := useMD3(c)
 	p := mdColors(t)
+	if a.consumeGroupBrackets() {
+		a.overlay.chosen = 0
+		a.overlay.list.ScrollTo(0, ui.Start)
+	}
 	items := a.filteredSnippets(a.overlay.filter)
+	if !a.showUngrouped {
+		items = groupedOnly(items)
+	}
 	if a.overlay.chosen >= len(items) {
 		a.overlay.chosen = max(len(items)-1, 0)
 	}
@@ -30,6 +37,22 @@ func (a *App) OverlayView(c *ui.Context) {
 		a.overlaySearch(c, t, items)
 		a.overlayBody(c, t, p, items)
 	})
+}
+
+// consumeGroupBrackets reads [ and ] out of the bound keyword and turns
+// them into group steps. MyGo's OnTextKey sees only keys that type no text,
+// so a bracket reaches the input before this runs; stripping it here keeps
+// the list and the field in step. Brackets cannot be searched for.
+func (a *App) consumeGroupBrackets() bool {
+	keyword, step := splitBrackets(a.overlay.filter.Keyword)
+	if keyword == a.overlay.filter.Keyword {
+		return false
+	}
+	a.overlay.filter.Keyword = keyword
+	if step != 0 {
+		a.overlay.filter = cycleGroup(a.overlay.filter, groupSteps(a.groups, a.showUngrouped), step)
+	}
+	return true
 }
 
 func (a *App) overlaySearch(c *ui.Context, t *ui.Theme, items []store.Snippet) {
@@ -172,7 +195,9 @@ func (a *App) overlayFilters(c *ui.Context, t *ui.Theme, p mdPalette) {
 		ui.Scroll(c).Grow(1).Padding(10).Gap(6).Children(func() {
 			sectionTitle(c, "分组")
 			a.groupRow(c, t, p, "全部", scopeAll, nil)
-			a.groupRow(c, t, p, "未分组", scopeUngrouped, nil)
+			if a.showUngrouped {
+				a.groupRow(c, t, p, "未分组", scopeUngrouped, nil)
+			}
 			for _, group := range a.groups {
 				group := group
 				a.groupRow(c, t, p, group.Name, scopeGroup, &group.ID)
@@ -196,6 +221,7 @@ func (a *App) overlayFilters(c *ui.Context, t *ui.Theme, p mdPalette) {
 					a.overlay.filter.TagIDs = toggleID(a.overlay.filter.TagIDs, tag.ID)
 					a.overlay.chosen = 0
 					a.overlay.list.ScrollTo(0, ui.Start)
+					a.overlay.search.Focus()
 				}
 			}
 		})
@@ -223,6 +249,7 @@ func (a *App) groupRow(c *ui.Context, t *ui.Theme, p mdPalette, label, scope str
 		}
 		a.overlay.chosen = 0
 		a.overlay.list.ScrollTo(0, ui.Start)
+		a.overlay.search.Focus()
 	}
 }
 
@@ -234,6 +261,16 @@ func (a *App) overlayEmpty(c *ui.Context, t *ui.Theme, p mdPalette) {
 			ui.Text(c, "没有匹配的预设文本").FontSize(12).TextColor(p.OnSurfaceVariant)
 			if textButton(c, "清除筛选").Clicked() {
 				a.overlay.filter = FilterState{Scope: scopeAll}
+				a.overlay.search.Focus()
+			}
+			return
+		}
+		if !a.showUngrouped && len(a.snippets) > 0 {
+			// Every snippet is ungrouped and hidden: point at the manager
+			// instead of claiming the library is empty.
+			ui.Text(c, "暂无分组预设文本").FontSize(12).TextColor(p.OnSurfaceVariant)
+			if textButton(c, "打开管理窗口").Clicked() {
+				a.ShowManager(false)
 			}
 			return
 		}
