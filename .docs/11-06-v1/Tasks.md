@@ -10,7 +10,7 @@
 
 ### TASK-001：通用位置迁移并为分组表加 position 列
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：无
@@ -28,7 +28,7 @@
 
 ### TASK-002：通用重排并新增 ReorderGroups
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：TASK-001
@@ -47,7 +47,7 @@
 
 ### TASK-003：全角方括号等效翻组
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：无
@@ -62,7 +62,7 @@
 
 ### TASK-004：分组栏顺序与默认作用域
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：TASK-001, TASK-003
@@ -90,7 +90,7 @@
 
 ### TASK-005：应用层重排锚点复用与 reorderGroups
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：TASK-002
@@ -105,7 +105,7 @@
 
 ### TASK-006：侧栏分组区改为可拖动列表
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：TASK-005
@@ -130,7 +130,7 @@
 
 ### TASK-007：全量本地验证与 Windows 实机输入法验收
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P0
 - **Depends**：TASK-001 ~ TASK-006
@@ -148,7 +148,7 @@
 
 ### TASK-008：同步 Project.md
 
-- **Status**：PENDING
+- **Status**：DONE
 - **Executor**：主线
 - **Priority**：P1
 - **Depends**：TASK-007

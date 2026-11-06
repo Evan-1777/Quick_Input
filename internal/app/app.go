@@ -47,10 +47,11 @@ type overlayState struct {
 
 // libraryState is the manager's model.
 type libraryState struct {
-	filter FilterState
-	chosen ui.Selection[int64]
-	list   ui.ListState
-	page   page
+	filter    FilterState
+	chosen    ui.Selection[int64]
+	list      ui.ListState
+	groupList ui.ListState
+	page      page
 
 	err string
 
@@ -136,7 +137,7 @@ func (a *App) SetShowUngrouped(show bool) error {
 	}
 	a.showUngrouped = show
 	if !show && a.overlay.filter.Scope == scopeUngrouped {
-		a.overlay.filter = FilterState{Scope: scopeAll}
+		a.overlay.filter = a.defaultOverlayScope()
 	}
 	return nil
 }
@@ -207,31 +208,63 @@ func (a *App) filteredSnippets(f FilterState) []store.Snippet {
 	return filterSnippets(a.snippets, f)
 }
 
-// reorderSnippets moves rows to before the first visible row from to on
-// that is not moving; no such row puts them at the end. Hidden rows keep
-// their relative order around the visible anchor.
-func (a *App) reorderSnippets(items []store.Snippet, rows []int, to int) {
+// reorderTarget turns dragged rows into the ids to move and the anchor
+// they go before: the first row from to on that is not moving; no such row
+// means the end. ok is false when a row is out of range or none is given.
+func reorderTarget(ids []int64, rows []int, to int) (moving []int64, before *int64, ok bool) {
 	if len(rows) == 0 {
-		return
+		return nil, nil, false
 	}
-	ids := make([]int64, 0, len(rows))
-	moving := make(map[int64]bool, len(rows))
+	moving = make([]int64, 0, len(rows))
+	movingIDs := make(map[int64]bool, len(rows))
 	for _, row := range rows {
-		if row < 0 || row >= len(items) {
-			return
+		if row < 0 || row >= len(ids) {
+			return nil, nil, false
 		}
-		ids = append(ids, items[row].ID)
-		moving[items[row].ID] = true
+		moving = append(moving, ids[row])
+		movingIDs[ids[row]] = true
 	}
-	var before *int64
-	for i := max(to, 0); i < len(items); i++ {
-		if !moving[items[i].ID] {
-			id := items[i].ID
+	for i := max(to, 0); i < len(ids); i++ {
+		if !movingIDs[ids[i]] {
+			id := ids[i]
 			before = &id
 			break
 		}
 	}
-	if err := a.store.ReorderSnippets(ids, before); err != nil {
+	return moving, before, true
+}
+
+// reorderSnippets moves rows to before the first visible row from to on
+// that is not moving; no such row puts them at the end. Hidden rows keep
+// their relative order around the visible anchor.
+func (a *App) reorderSnippets(items []store.Snippet, rows []int, to int) {
+	ids := make([]int64, len(items))
+	for i := range items {
+		ids[i] = items[i].ID
+	}
+	moving, before, ok := reorderTarget(ids, rows, to)
+	if !ok {
+		return
+	}
+	if err := a.store.ReorderSnippets(moving, before); err != nil {
+		a.lib.err = err.Error()
+		return
+	}
+	a.reload()
+}
+
+// reorderGroups moves dragged sidebar rows in the same way, then refreshes
+// the snapshot so the panel's cycle follows the new order.
+func (a *App) reorderGroups(rows []int, to int) {
+	ids := make([]int64, len(a.groups))
+	for i := range a.groups {
+		ids[i] = a.groups[i].ID
+	}
+	moving, before, ok := reorderTarget(ids, rows, to)
+	if !ok {
+		return
+	}
+	if err := a.store.ReorderGroups(moving, before); err != nil {
 		a.lib.err = err.Error()
 		return
 	}
@@ -310,8 +343,14 @@ func (a *App) ShowSettings() {
 	}
 }
 
+// defaultOverlayScope is the panel's opening scope and its Escape base: the
+// first step of the group cycle, which falls back to all without groups.
+func (a *App) defaultOverlayScope() FilterState {
+	return groupSteps(a.groups, a.showUngrouped)[0]
+}
+
 func (a *App) resetOverlay() {
-	a.overlay.filter = FilterState{Scope: scopeAll}
+	a.overlay.filter = a.defaultOverlayScope()
 	a.overlay.chosen = 0
 	a.overlay.list.ScrollTo(0, ui.Start)
 }

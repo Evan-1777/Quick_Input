@@ -39,10 +39,11 @@ func (a *App) OverlayView(c *ui.Context) {
 	})
 }
 
-// consumeGroupBrackets reads [ and ] out of the bound keyword and turns
-// them into group steps. MyGo's OnTextKey sees only keys that type no text,
-// so a bracket reaches the input before this runs; stripping it here keeps
-// the list and the field in step. Brackets cannot be searched for.
+// consumeGroupBrackets reads [ and ] (half-width or full-width) out of the
+// bound keyword and turns them into group steps. MyGo's OnTextKey sees only
+// keys that type no text, so a bracket reaches the input before this runs;
+// stripping it here keeps the list and the field in step. Brackets cannot
+// be searched for.
 func (a *App) consumeGroupBrackets() bool {
 	keyword, step := splitBrackets(a.overlay.filter.Keyword)
 	if keyword == a.overlay.filter.Keyword {
@@ -106,15 +107,14 @@ func (a *App) overlaySearch(c *ui.Context, t *ui.Theme, items []store.Snippet) {
 		a.insertChosen(items)
 	}
 	if c.Shortcut(0, ui.KeyEscape) {
+		base := a.defaultOverlayScope()
 		switch {
 		case a.overlay.filter.Keyword != "":
 			a.overlay.filter.Keyword = ""
 			a.overlay.chosen = 0
 			a.overlay.list.ScrollTo(0, ui.Start)
-		case a.overlay.filter.Scope != scopeAll || len(a.overlay.filter.TagIDs) > 0:
-			a.overlay.filter.Scope = scopeAll
-			a.overlay.filter.GroupID = nil
-			a.overlay.filter.TagIDs = nil
+		case !sameScope(a.overlay.filter, base) || len(a.overlay.filter.TagIDs) > 0:
+			a.overlay.filter = base
 			a.overlay.chosen = 0
 			a.overlay.list.ScrollTo(0, ui.Start)
 		default:
@@ -194,13 +194,13 @@ func (a *App) overlayFilters(c *ui.Context, t *ui.Theme, p mdPalette) {
 	side.Children(func() {
 		ui.Scroll(c).Grow(1).Padding(10).Gap(6).Children(func() {
 			sectionTitle(c, "分组")
-			a.groupRow(c, t, p, "全部", scopeAll, nil)
-			if a.showUngrouped {
-				a.groupRow(c, t, p, "未分组", scopeUngrouped, nil)
-			}
 			for _, group := range a.groups {
 				group := group
 				a.groupRow(c, t, p, group.Name, scopeGroup, &group.ID)
+			}
+			a.groupRow(c, t, p, "全部", scopeAll, nil)
+			if a.showUngrouped {
+				a.groupRow(c, t, p, "未分组", scopeUngrouped, nil)
 			}
 			ui.Box(c).Height(4)
 			sectionTitle(c, "标签")
@@ -230,8 +230,7 @@ func (a *App) overlayFilters(c *ui.Context, t *ui.Theme, p mdPalette) {
 
 func (a *App) groupRow(c *ui.Context, t *ui.Theme, p mdPalette, label, scope string, id *int64) {
 	row := ui.Row(c).Height(28).Padding(0, 8).Gap(7).Radius(radiusChip)
-	active := a.overlay.filter.Scope == scope &&
-		(scope != scopeGroup || (id != nil && a.overlay.filter.GroupID != nil && *id == *a.overlay.filter.GroupID))
+	active := sameScope(a.overlay.filter, FilterState{Scope: scope, GroupID: id})
 	switch {
 	case active:
 		row.Background(p.PrimaryContainer).TextColor(p.OnPrimaryContainer)

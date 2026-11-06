@@ -75,9 +75,14 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, p mdPalette) {
 			}
 			a.sidebarGroup(c, t, p, nil, "全部", scopeAll)
 			a.sidebarGroup(c, t, p, nil, "未分组", scopeUngrouped)
-			for _, group := range a.groups {
-				group := group
-				a.sidebarGroup(c, t, p, &group, group.Name, scopeGroup)
+			if len(a.groups) > 0 {
+				a.lib.groupList.Key = func(i int) any { return a.groups[i].ID }
+				a.lib.groupList.Label = func(i int) string { return a.groups[i].Name }
+				a.lib.groupList.Reorder = a.reorderGroups
+				ui.List(c, &a.lib.groupList, len(a.groups), func(i int) {
+					group := a.groups[i]
+					a.sidebarGroup(c, t, p, &group, group.Name, scopeGroup)
+				}).Height(float32(len(a.groups) * 33)).Gap(3)
 			}
 
 			ui.Box(c).Height(6)
@@ -104,6 +109,9 @@ func (a *App) sidebar(c *ui.Context, t *ui.Theme, p mdPalette) {
 
 func (a *App) sidebarGroup(c *ui.Context, t *ui.Theme, p mdPalette, group *store.Group, label, scope string) {
 	row := ui.Row(c).Height(30).Padding(0, 8).Gap(8).Radius(radiusChip)
+	if group != nil {
+		row.Key(group.ID)
+	}
 	active := a.lib.filter.Scope == scope
 	if scope == scopeGroup && group != nil {
 		active = a.lib.filter.Scope == scopeGroup && a.lib.filter.GroupID != nil && *a.lib.filter.GroupID == group.ID

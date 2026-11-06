@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -111,6 +112,90 @@ func TestManagerReorderStoreError(t *testing.T) {
 	}
 }
 
+func TestReorderGroupsStoreError(t *testing.T) {
+	fx := newFixture(t)
+	before := strings.Join(appGroupNames(fx.app), ",")
+	if err := fx.app.store.Close(); err != nil {
+		t.Fatalf("关闭 store: %v", err)
+	}
+	fx.app.reorderGroups([]int{1}, 0)
+
+	if fx.app.lib.err == "" {
+		t.Fatal("写库失败应写入错误条")
+	}
+	if got := strings.Join(appGroupNames(fx.app), ","); got != before {
+		t.Fatalf("写库失败改变了内存顺序: %v, want %v", got, before)
+	}
+}
+
+func TestManagerReorderGroups(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	living, ok := tt.Find("生活")
+	if !ok || living.X >= 232 {
+		t.Fatalf("侧栏生活分组未找到: %v", living)
+	}
+	work, ok := tt.Find("工作")
+	if !ok || work.X >= 232 {
+		t.Fatalf("侧栏工作分组未找到: %v", work)
+	}
+	dragRow(tt, living.X+living.W/2, living.Y+living.H/2, work.X+work.W/2, work.Y+2)
+
+	if got := strings.Join(appGroupNames(fx.app), ","); got != "生活,工作" {
+		t.Fatalf("拖动后分组顺序 = %v, want [生活 工作]", got)
+	}
+	if fx.app.editor != nil {
+		t.Fatal("拖动分组不应打开编辑侧边页")
+	}
+	if fx.app.lib.filter.Scope != scopeAll {
+		t.Fatalf("拖动分组改变了列表筛选: %+v", fx.app.lib.filter)
+	}
+
+	// The panel opens on the new first group, and its cycle follows the
+	// stored order.
+	fx.app.ShowOverlay()
+	if fx.app.overlay.filter.Scope != scopeGroup ||
+		fx.app.overlay.filter.GroupID == nil || *fx.app.overlay.filter.GroupID != fx.groupB {
+		t.Fatalf("面板默认分组 = %+v, want 生活", fx.app.overlay.filter)
+	}
+	ttOverlay := ui.NewTester(fx.app.OverlayView, 560, 380)
+	ttOverlay.TypeKey(0, ui.KeyBracketRight, "]")
+	if fx.app.overlay.filter.Scope != scopeGroup ||
+		fx.app.overlay.filter.GroupID == nil || *fx.app.overlay.filter.GroupID != fx.groupA {
+		t.Fatalf("] 后应切到工作分组: %+v", fx.app.overlay.filter)
+	}
+}
+
+func TestManagerSidebarGroupClick(t *testing.T) {
+	fx := newFixture(t)
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	rect, ok := tt.Find("生活")
+	if !ok || rect.X >= 232 {
+		t.Fatalf("侧栏生活分组未找到: %v", rect)
+	}
+	if err := tt.Click("生活"); err != nil {
+		t.Fatalf("click 生活: %v", err)
+	}
+	if fx.app.lib.filter.Scope != scopeGroup ||
+		fx.app.lib.filter.GroupID == nil || *fx.app.lib.filter.GroupID != fx.groupB {
+		t.Fatalf("点击分组后筛选 = %+v, want 生活", fx.app.lib.filter)
+	}
+}
+
+func appGroupNames(a *App) []string {
+	names := make([]string, 0, len(a.groups))
+	for _, group := range a.groups {
+		names = append(names, group.Name)
+	}
+	return names
+}
+
 func appTitles(a *App) []string {
 	titles := make([]string, 0, len(a.snippets))
 	for _, snippet := range a.snippets {
@@ -196,6 +281,42 @@ func TestManagerCreateEditDelete(t *testing.T) {
 	}
 	if tt.HasText("周报模板改") {
 		t.Fatalf("confirmed delete left the row: %v", tt.Texts())
+	}
+}
+
+func TestManagerSidebarGroupsMany(t *testing.T) {
+	fx := newFixture(t)
+	for i := 1; i <= 20; i++ {
+		if _, err := fx.app.store.SaveGroup(0, fmt.Sprintf("分组%02d", i)); err != nil {
+			t.Fatalf("新建分组 %d: %v", i, err)
+		}
+	}
+	fx.app.ShowManager(false)
+	tt := ui.NewTester(fx.app.ManagerView, 960, 640)
+	tt.SetSize(960, 640)
+
+	first, ok := tt.Find("分组01")
+	if !ok || first.X >= 232 {
+		t.Fatalf("首个分组未在侧栏: %v", first)
+	}
+	last, ok := tt.Find("分组20")
+	if !ok || last.X >= 232 {
+		t.Fatalf("末个分组未在侧栏: %v", last)
+	}
+	// 33px per row (30 + 3 gap): the List is exactly its rows high, so it
+	// grows with the sidebar scroll rather than scrolling inside itself.
+	if pitch := last.Y - first.Y; pitch < 19*33-2 || pitch > 19*33+2 {
+		t.Fatalf("分组行距 = %.1f, want %d", pitch, 19*33)
+	}
+
+	// The sidebar scrolls to the end of the group list.
+	if last.Y+last.H > 640 {
+		tt.Scroll(100, 560, 0, 2000)
+		tt.Frame()
+		last, ok = tt.Find("分组20")
+	}
+	if !ok || last.Y+last.H > 640 {
+		t.Fatalf("末行未进入侧栏可视区: %v", last)
 	}
 }
 

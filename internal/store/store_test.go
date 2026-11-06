@@ -390,6 +390,113 @@ func TestReorderSnippetsMultipleIDs(t *testing.T) {
 	}
 }
 
+func TestGroupPositionMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quick_input.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("打开旧库: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE groups (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("建旧版 groups: %v", err)
+	}
+	for _, name := range []string{"banana", "Apple", "cherry"} {
+		if _, err := db.Exec(`INSERT INTO groups (name, created_at) VALUES (?, ?)`,
+			name, "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatalf("插入旧记录: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭旧库: %v", err)
+	}
+
+	s, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("迁移旧库: %v", err)
+	}
+	if got := groupNames(t, s); strings.Join(got, ",") != "Apple,banana,cherry" {
+		t.Fatalf("迁移后顺序 = %v, want [Apple banana cherry]", got)
+	}
+	positions := queryInts(t, s, `SELECT position FROM groups ORDER BY position`)
+	if len(positions) != 3 || positions[0] != 0 || positions[1] != 1 || positions[2] != 2 {
+		t.Fatalf("回填 position = %v, want [0 1 2]", positions)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("关闭库: %v", err)
+	}
+
+	reopened, err := NewStore(path)
+	if err != nil {
+		t.Fatalf("重新打开库: %v", err)
+	}
+	defer reopened.Close()
+	if got := groupNames(t, reopened); strings.Join(got, ",") != "Apple,banana,cherry" {
+		t.Fatalf("再次启动改变了顺序: %v", got)
+	}
+
+	fresh := newTestStore(t)
+	mustGroup(t, fresh, "B")
+	mustGroup(t, fresh, "A")
+	if got := groupNames(t, fresh); strings.Join(got, ",") != "B,A" {
+		t.Fatalf("新建分组应追加到末尾: %v, want [B A]", got)
+	}
+}
+
+func TestReorderGroups(t *testing.T) {
+	s := newTestStore(t)
+	x := mustGroup(t, s, "X")
+	mustGroup(t, s, "Y")
+	z := mustGroup(t, s, "Z")
+
+	if err := s.ReorderGroups([]int64{z.ID}, &x.ID); err != nil {
+		t.Fatalf("Z 到 X 前: %v", err)
+	}
+	if got := groupNames(t, s); strings.Join(got, ",") != "Z,X,Y" {
+		t.Fatalf("重排后顺序 = %v, want [Z X Y]", got)
+	}
+
+	if err := s.ReorderGroups([]int64{z.ID}, nil); err != nil {
+		t.Fatalf("Z 到末尾: %v", err)
+	}
+	if got := groupNames(t, s); strings.Join(got, ",") != "X,Y,Z" {
+		t.Fatalf("nil 锚点后顺序 = %v, want [X Y Z]", got)
+	}
+}
+
+func groupNames(t *testing.T, s *Store) []string {
+	t.Helper()
+	groups, err := s.ListGroups()
+	if err != nil {
+		t.Fatalf("ListGroups: %v", err)
+	}
+	names := make([]string, 0, len(groups))
+	for _, group := range groups {
+		names = append(names, group.Name)
+	}
+	return names
+}
+
+func queryInts(t *testing.T, s *Store, query string) []int {
+	t.Helper()
+	rows, err := s.db.Query(query)
+	if err != nil {
+		t.Fatalf("查询: %v", err)
+	}
+	defer rows.Close()
+	var values []int
+	for rows.Next() {
+		var value int
+		if err := rows.Scan(&value); err != nil {
+			t.Fatalf("扫描: %v", err)
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
 func snippetTitles(t *testing.T, s *Store) []string {
 	t.Helper()
 	items, err := s.ListSnippets(SnippetFilter{GroupScope: "all"})

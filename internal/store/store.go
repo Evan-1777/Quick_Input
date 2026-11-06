@@ -78,7 +78,8 @@ var schema = []string{
 	`CREATE TABLE IF NOT EXISTS groups (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		position INTEGER NOT NULL DEFAULT 0
 	)`,
 	`CREATE TABLE IF NOT EXISTS tags (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,19 +133,24 @@ func NewStore(dbPath string) (*Store, error) {
 			return nil, fmt.Errorf("初始化表结构: %w", err)
 		}
 	}
-	if err := ensureSnippetPosition(db); err != nil {
+	if err := ensurePosition(db, "snippets", "updated_at DESC, id DESC"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("初始化表结构: %w", err)
+	}
+	if err := ensurePosition(db, "groups", "name COLLATE NOCASE, id"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("初始化表结构: %w", err)
 	}
 	return &Store{db: db}, nil
 }
 
-// ensureSnippetPosition adds the manual-order column to a library created
-// before it existed, backfilling the old display order in one transaction.
-// The column's presence is the migration marker. The pragma rows are closed
+// ensurePosition adds a manual-order column to a table created before it
+// existed, backfilling the old display order in one transaction. The
+// column's presence is the migration marker. The pragma rows are closed
 // before the transaction starts: the store runs a single connection.
-func ensureSnippetPosition(db *sql.DB) error {
-	rows, err := db.Query(`PRAGMA table_info(snippets)`)
+// table and backfillOrder come from package constants only.
+func ensurePosition(db *sql.DB, table, backfillOrder string) error {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
 	}
@@ -178,10 +184,10 @@ func ensureSnippetPosition(db *sql.DB) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`ALTER TABLE snippets ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); err != nil {
+	if _, err := tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN position INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
-	ordered, err := tx.Query(`SELECT id FROM snippets ORDER BY updated_at DESC, id DESC`)
+	ordered, err := tx.Query(`SELECT id FROM ` + table + ` ORDER BY ` + backfillOrder)
 	if err != nil {
 		return err
 	}
@@ -200,7 +206,7 @@ func ensureSnippetPosition(db *sql.DB) error {
 	}
 	ordered.Close()
 	for position, id := range ids {
-		if _, err := tx.Exec(`UPDATE snippets SET position = ? WHERE id = ?`, position, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+table+` SET position = ? WHERE id = ?`, position, id); err != nil {
 			return err
 		}
 	}
@@ -234,9 +240,9 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
-// ListGroups 返回全部按名称排序的分组。
+// ListGroups 返回全部按手动顺序排序的分组。
 func (s *Store) ListGroups() ([]Group, error) {
-	rows, err := s.db.Query(`SELECT id, name, created_at FROM groups ORDER BY name COLLATE NOCASE`)
+	rows, err := s.db.Query(`SELECT id, name, created_at FROM groups ORDER BY position, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +276,13 @@ func (s *Store) SaveGroup(id int64, name string) (Group, error) {
 			return Group{}, sql.ErrNoRows
 		}
 	} else {
-		res, err := s.db.Exec(`INSERT INTO groups (name, created_at) VALUES (?, ?)`, name, now())
+		// Groups append to the end so a new one never disturbs a menu the
+		// user has already arranged.
+		res, err := s.db.Exec(
+			`INSERT INTO groups (name, created_at, position)
+			 VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM groups))`,
+			name, now(),
+		)
 		if err != nil {
 			return Group{}, mapErr(err)
 		}
@@ -544,12 +556,23 @@ func (s *Store) DeleteSnippets(ids []int64) error {
 	return tx.Commit()
 }
 
-// ReorderSnippets moves ids in front of before (nil: to the end) and
-// renumbers every position 0..n-1 in one transaction. Renumbering writes
-// the whole table: fine at personal-library scale, and the upgrade path is
-// spaced positions if a large library ever makes the write amplification
-// matter.
+// ReorderSnippets moves snippet ids in front of before (nil: to the end).
 func (s *Store) ReorderSnippets(ids []int64, before *int64) error {
+	return s.reorder("snippets", ids, before)
+}
+
+// ReorderGroups moves group ids in front of before (nil: to the end),
+// with the same semantics as ReorderSnippets.
+func (s *Store) ReorderGroups(ids []int64, before *int64) error {
+	return s.reorder("groups", ids, before)
+}
+
+// reorder moves ids in front of before (nil: to the end) and renumbers
+// every position 0..n-1 in one transaction. table is a package constant.
+// Renumbering writes the whole table: fine at personal-library scale, and
+// the upgrade path is spaced positions if a large library ever makes the
+// write amplification matter.
+func (s *Store) reorder(table string, ids []int64, before *int64) error {
 	ids = uniqueIDs(ids)
 	if len(ids) == 0 {
 		return nil
@@ -561,7 +584,7 @@ func (s *Store) ReorderSnippets(ids []int64, before *int64) error {
 	}
 	defer tx.Rollback()
 
-	rows, err := tx.Query(`SELECT id FROM snippets ORDER BY position, id`)
+	rows, err := tx.Query(`SELECT id FROM ` + table + ` ORDER BY position, id`)
 	if err != nil {
 		return err
 	}
@@ -605,7 +628,7 @@ func (s *Store) ReorderSnippets(ids []int64, before *int64) error {
 	final = append(final, ids...)
 	final = append(final, rest[at:]...)
 	for position, id := range final {
-		if _, err := tx.Exec(`UPDATE snippets SET position = ? WHERE id = ?`, position, id); err != nil {
+		if _, err := tx.Exec(`UPDATE `+table+` SET position = ? WHERE id = ?`, position, id); err != nil {
 			return err
 		}
 	}

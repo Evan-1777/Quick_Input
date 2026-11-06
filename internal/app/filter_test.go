@@ -75,36 +75,43 @@ func TestGroupSteps(t *testing.T) {
 	groups := []store.Group{{ID: 10}, {ID: 20}}
 
 	steps := groupSteps(groups, false)
-	if len(steps) != 3 || steps[0].Scope != scopeAll || steps[1].Scope != scopeGroup {
+	if len(steps) != 3 || steps[0].Scope != scopeGroup || steps[0].GroupID == nil || *steps[0].GroupID != 10 {
 		t.Fatalf("隐藏未分组时步骤 = %+v", steps)
 	}
-	if steps[1].GroupID == nil || *steps[1].GroupID != 10 || steps[2].GroupID == nil || *steps[2].GroupID != 20 {
+	if steps[1].GroupID == nil || *steps[1].GroupID != 20 || steps[2].Scope != scopeAll {
 		t.Fatalf("分组步骤顺序 = %+v", steps)
 	}
 
 	steps = groupSteps(groups, true)
-	if len(steps) != 4 || steps[1].Scope != scopeUngrouped || steps[2].Scope != scopeGroup {
+	if len(steps) != 4 || steps[2].Scope != scopeAll || steps[3].Scope != scopeUngrouped {
 		t.Fatalf("显示未分组时步骤 = %+v", steps)
+	}
+
+	if steps = groupSteps(nil, false); len(steps) != 1 || steps[0].Scope != scopeAll {
+		t.Fatalf("无分组时应退回全部: %+v", steps)
 	}
 }
 
 func TestCycleGroup(t *testing.T) {
 	a, b := int64(10), int64(20)
 	steps := []FilterState{
-		{Scope: scopeAll},
 		{Scope: scopeGroup, GroupID: &a},
 		{Scope: scopeGroup, GroupID: &b},
+		{Scope: scopeAll},
 	}
 	base := FilterState{Scope: scopeAll, Keyword: "hello", TagIDs: []int64{7}}
 
 	if got := cycleGroup(base, steps, 1); got.Scope != scopeGroup || got.GroupID == nil || *got.GroupID != a {
-		t.Fatalf("向后一步 = %+v", got)
+		t.Fatalf("全部向后一步 = %+v", got)
 	}
 	if got := cycleGroup(base, steps, -1); got.Scope != scopeGroup || got.GroupID == nil || *got.GroupID != b {
-		t.Fatalf("向前一步 = %+v", got)
+		t.Fatalf("全部向前一步 = %+v", got)
 	}
 	if got := cycleGroup(FilterState{Scope: scopeGroup, GroupID: &b}, steps, 1); got.Scope != scopeAll || got.GroupID != nil {
-		t.Fatalf("末组向后回绕 = %+v", got)
+		t.Fatalf("末组向后到全部 = %+v", got)
+	}
+	if got := cycleGroup(FilterState{Scope: scopeGroup, GroupID: &a}, steps, -1); got.Scope != scopeAll || got.GroupID != nil {
+		t.Fatalf("首组向前回绕到全部 = %+v", got)
 	}
 
 	got := cycleGroup(base, steps, 1)
@@ -129,10 +136,10 @@ func TestCycleGroup(t *testing.T) {
 	if got := cycleGroup(FilterState{}, steps, 0); got.Scope != scopeAll {
 		t.Fatalf("空 Scope 应归一为 all: %+v", got)
 	}
-	if got := cycleGroup(FilterState{Scope: scopeAll}, steps[:1], 1); got.Scope != scopeAll {
+	if got := cycleGroup(FilterState{Scope: scopeGroup, GroupID: &a}, steps[:1], 1); got.Scope != scopeGroup || *got.GroupID != a {
 		t.Fatalf("单元素步骤不应越界: %+v", got)
 	}
-	if got := cycleGroup(FilterState{Scope: scopeAll}, steps[:2], -1); got.Scope != scopeGroup || got.GroupID == nil || *got.GroupID != a {
+	if got := cycleGroup(FilterState{Scope: scopeGroup, GroupID: &b}, steps[:2], 1); got.Scope != scopeGroup || *got.GroupID != a {
 		t.Fatalf("双元素步骤回绕 = %+v", got)
 	}
 }
@@ -148,6 +155,9 @@ func TestSplitBrackets(t *testing.T) {
 		{"x[", "x", -1},
 		{"[[a]]", "a", 0},
 		{"]hello[", "hello", 0},
+		{"hel】lo", "hello", 1},
+		{"x【", "x", -1},
+		{"【a]", "a", 0},
 	}
 	for _, tc := range cases {
 		got, steps := splitBrackets(tc.in)

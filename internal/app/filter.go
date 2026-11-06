@@ -60,17 +60,31 @@ func groupedOnly(snippets []store.Snippet) []store.Snippet {
 	return result
 }
 
-// groupSteps is the panel's [ / ] cycle: all, ungrouped when shown, then
-// every group in the sidebar's order.
+// groupSteps is the panel's [ / ] cycle: every group in the sidebar's
+// order, then all, then ungrouped when shown. The first step is also the
+// panel's default scope.
 func groupSteps(groups []store.Group, ungrouped bool) []FilterState {
-	steps := []FilterState{{Scope: scopeAll}}
-	if ungrouped {
-		steps = append(steps, FilterState{Scope: scopeUngrouped})
-	}
+	steps := make([]FilterState, 0, len(groups)+2)
 	for i := range groups {
 		steps = append(steps, FilterState{Scope: scopeGroup, GroupID: &groups[i].ID})
 	}
+	steps = append(steps, FilterState{Scope: scopeAll})
+	if ungrouped {
+		steps = append(steps, FilterState{Scope: scopeUngrouped})
+	}
 	return steps
+}
+
+// sameScope reports whether a and b select the same group, or the same
+// non-group scope.
+func sameScope(a, b FilterState) bool {
+	if a.Scope != b.Scope {
+		return false
+	}
+	if a.Scope != scopeGroup {
+		return true
+	}
+	return a.GroupID != nil && b.GroupID != nil && *a.GroupID == *b.GroupID
 }
 
 // cycleGroup moves the filter one step around steps, keeping the keyword
@@ -93,16 +107,10 @@ func cycleGroup(f FilterState, steps []FilterState, step int) FilterState {
 	}
 	current := 0
 	for i, candidate := range steps {
-		if candidate.Scope != f.Scope {
-			continue
+		if sameScope(candidate, f) {
+			current = i
+			break
 		}
-		if f.Scope == scopeGroup {
-			if candidate.GroupID == nil || f.GroupID == nil || *candidate.GroupID != *f.GroupID {
-				continue
-			}
-		}
-		current = i
-		break
 	}
 	target := steps[nextIndex(current, len(steps), step)]
 	f.Scope = target.Scope
@@ -114,18 +122,19 @@ func cycleGroup(f FilterState, steps []FilterState, step int) FilterState {
 	return f
 }
 
-// splitBrackets removes every bracket and counts the net direction: [
-// steps back, ] steps forward. Brackets cannot be searched for.
+// splitBrackets removes every half-width or full-width bracket and counts
+// the net direction: [ or 【 steps back, ] or 】 steps forward. Neither
+// form can be searched for.
 func splitBrackets(keyword string) (string, int) {
-	if !strings.ContainsAny(keyword, "[]") {
+	if !strings.ContainsAny(keyword, "[]【】") {
 		return keyword, 0
 	}
 	step := 0
 	cleaned := strings.Map(func(r rune) rune {
 		switch r {
-		case '[':
+		case '[', '【':
 			step--
-		case ']':
+		case ']', '】':
 			step++
 		default:
 			return r

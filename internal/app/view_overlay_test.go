@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+
+	"quick-input/internal/store"
 )
 
 func TestOverlayFilterAndKeyboard(t *testing.T) {
@@ -14,8 +16,11 @@ func TestOverlayFilterAndKeyboard(t *testing.T) {
 	if tt.HasText("Search") {
 		t.Fatal("placeholder must be Chinese, found English Search")
 	}
-	if !tt.HasText("Greeting") || !tt.HasText("Farewell") {
-		t.Fatalf("initial rows missing: %v", tt.Texts())
+	if !tt.HasText("Greeting") || !tt.HasText("Mixed") {
+		t.Fatalf("默认分组行缺失: %v", tt.Texts())
+	}
+	if tt.HasText("Farewell") {
+		t.Fatalf("默认分组不应显示其他分组: %v", tt.Texts())
 	}
 
 	tt.Type("gree")
@@ -27,10 +32,13 @@ func TestOverlayFilterAndKeyboard(t *testing.T) {
 	if fx.app.overlay.filter.Keyword != "" {
 		t.Fatalf("Escape did not clear the keyword: %q", fx.app.overlay.filter.Keyword)
 	}
-	if !tt.HasText("Farewell") {
+	if !tt.HasText("Greeting") || !tt.HasText("Mixed") {
 		t.Fatalf("Escape should keep the panel open: %v", tt.Texts())
 	}
 
+	// Down and Enter need every row, so widen the scope explicitly.
+	fx.app.overlay.filter = FilterState{Scope: scopeAll}
+	tt.Frame()
 	tt.Key(0, ui.KeyDown)
 	tt.Key(0, ui.KeyEnter)
 	if len(fx.paster.texts) != 1 || fx.paster.texts[0] != "Goodbye world" {
@@ -53,7 +61,7 @@ func TestOverlayWrapUpAndTagIntersection(t *testing.T) {
 
 	fx = newFixture(t)
 	fx.app.ShowOverlay()
-	fx.app.overlay.filter.TagIDs = []int64{fx.tagA, fx.tagB}
+	fx.app.overlay.filter = FilterState{Scope: scopeAll, TagIDs: []int64{fx.tagA, fx.tagB}}
 	tt = ui.NewTester(fx.app.OverlayView, 560, 380)
 	if !tt.HasText("Farewell") || !tt.HasText("Mixed") {
 		t.Fatalf("tag intersection missing rows: %v", tt.Texts())
@@ -83,30 +91,49 @@ func TestOverlayGroupBracketsAndUngrouped(t *testing.T) {
 	if tt.HasText("未分组") {
 		t.Fatalf("默认不应渲染未分组筛选项: %v", tt.Texts())
 	}
-	if !tt.HasText("Greeting") || !tt.HasText("Farewell") || !tt.HasText("Mixed") {
-		t.Fatalf("初始行缺失: %v", tt.Texts())
-	}
-
-	tt.TypeKey(0, ui.KeyBracketRight, "]")
 	assertOverlayScope(t, fx, scopeGroup, &fx.groupA)
-	if tt.HasText("Farewell") || !tt.HasText("Greeting") || !tt.HasText("Mixed") {
-		t.Fatalf("] 后未切到工作分组: %v", tt.Texts())
+	if !tt.HasText("Greeting") || !tt.HasText("Mixed") {
+		t.Fatalf("默认分组行缺失: %v", tt.Texts())
+	}
+	if tt.HasText("Farewell") {
+		t.Fatalf("默认不应显示其他分组: %v", tt.Texts())
 	}
 
-	tt.TypeKey(0, ui.KeyBracketRight, "]")
+	// With no row to show, the group names in the filter column are the
+	// only matches, so the ordering check cannot hit a row's meta text.
+	fx.app.overlay.filter.Keyword = "zzz"
+	tt.Frame()
+	work, ok := tt.Find("工作")
+	living, ok2 := tt.Find("生活")
+	all, ok3 := tt.Find("全部")
+	if !ok || !ok2 || !ok3 || work.Y >= all.Y || living.Y >= all.Y {
+		t.Fatalf("分组应排在全部之前: work=%v living=%v all=%v", work, living, all)
+	}
+	fx.app.overlay.filter.Keyword = ""
+	tt.Frame()
+
+	// A full-width bracket commits like a half-width one and leaves no
+	// residue in the keyword.
+	tt.TypeKey(0, ui.KeyBracketRight, "】")
 	assertOverlayScope(t, fx, scopeGroup, &fx.groupB)
+	if fx.app.overlay.filter.Keyword != "" {
+		t.Fatalf("全角方括号残留: %q", fx.app.overlay.filter.Keyword)
+	}
 	if !tt.HasText("Farewell") || tt.HasText("Greeting") {
-		t.Fatalf("] 后未切到生活分组: %v", tt.Texts())
+		t.Fatalf("】 后未切到生活分组: %v", tt.Texts())
 	}
 
 	tt.TypeKey(0, ui.KeyBracketRight, "]")
 	assertOverlayScope(t, fx, scopeAll, nil)
 	if !tt.HasText("Greeting") || !tt.HasText("Farewell") {
-		t.Fatalf("] 未循环回全部: %v", tt.Texts())
+		t.Fatalf("] 未循环到全部: %v", tt.Texts())
 	}
 
+	tt.TypeKey(0, ui.KeyBracketRight, "]")
+	assertOverlayScope(t, fx, scopeGroup, &fx.groupA)
+
 	tt.TypeKey(0, ui.KeyBracketLeft, "[")
-	assertOverlayScope(t, fx, scopeGroup, &fx.groupB)
+	assertOverlayScope(t, fx, scopeAll, nil)
 
 	// Clicking a group restores the search focus, so the next keys land in
 	// the field; brackets keep the keyword and move one group.
@@ -145,6 +172,9 @@ func TestOverlayGroupBracketsAndUngrouped(t *testing.T) {
 	if err := tt.Click("清除筛选"); err != nil {
 		t.Fatalf("click 清除筛选: %v", err)
 	}
+	if fx.app.overlay.filter.Scope != scopeAll {
+		t.Fatalf("清除筛选应回到全部: %+v", fx.app.overlay.filter)
+	}
 	tt.Type("q")
 	if fx.app.overlay.filter.Keyword != "q" {
 		t.Fatalf("清除筛选后按键未进入搜索框: %q", fx.app.overlay.filter.Keyword)
@@ -163,15 +193,22 @@ func TestOverlayGroupBracketsAndUngrouped(t *testing.T) {
 		t.Fatalf("多枚方括号残留: %q", fx.app.overlay.filter.Keyword)
 	}
 
-	// Shown ungrouped joins the list and the cycle right after 全部.
+	// Shown ungrouped joins the cycle after 全部.
 	fx = newFixture(t)
 	if err := fx.app.SetShowUngrouped(true); err != nil {
 		t.Fatalf("开启显示未分组: %v", err)
 	}
 	fx.app.ShowOverlay()
 	tt = ui.NewTester(fx.app.OverlayView, 560, 380)
-	if !tt.HasText("Ungrouped") || !tt.HasText("未分组") {
-		t.Fatalf("开启后未分组未出现: %v", tt.Texts())
+	assertOverlayScope(t, fx, scopeGroup, &fx.groupA)
+	if !tt.HasText("未分组") {
+		t.Fatalf("开启后未分组筛选项未出现: %v", tt.Texts())
+	}
+	if err := tt.Click("全部"); err != nil {
+		t.Fatalf("click 全部: %v", err)
+	}
+	if !tt.HasText("Ungrouped") {
+		t.Fatalf("全部作用域应显示未分组条目: %v", tt.Texts())
 	}
 	tt.TypeKey(0, ui.KeyBracketRight, "]")
 	assertOverlayScope(t, fx, scopeUngrouped, nil)
@@ -180,7 +217,7 @@ func TestOverlayGroupBracketsAndUngrouped(t *testing.T) {
 	}
 
 	// With every snippet ungrouped and the preference off, the empty state
-	// says why and offers the manager.
+	// says why and offers the manager once the scope is 全部.
 	fx = newFixture(t)
 	ids := make([]int64, 0, len(fx.app.snippets))
 	for _, snippet := range fx.app.snippets {
@@ -190,9 +227,36 @@ func TestOverlayGroupBracketsAndUngrouped(t *testing.T) {
 		t.Fatalf("全部移为未分组: %v", err)
 	}
 	fx.app.ShowOverlay()
+	fx.app.overlay.filter = FilterState{Scope: scopeAll}
 	tt = ui.NewTester(fx.app.OverlayView, 560, 380)
 	if !tt.HasText("暂无分组预设文本") || !tt.HasText("打开管理窗口") {
 		t.Fatalf("未分组空态缺失: %v", tt.Texts())
+	}
+
+	// Escape at the default scope hides the panel at once.
+	fx = newFixture(t)
+	fx.app.ShowOverlay()
+	tt = ui.NewTester(fx.app.OverlayView, 560, 380)
+	tt.Key(0, ui.KeyEscape)
+	if fx.app.overlay.visible {
+		t.Fatal("默认作用域下无关键字 Esc 应隐藏面板")
+	}
+}
+
+func TestOverlayDefaultScopeWithoutGroups(t *testing.T) {
+	st, err := store.NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer st.Close()
+
+	a := New(st, &fakePaster{}, newFakeShortcuts())
+	if err := a.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	a.ShowOverlay()
+	if a.overlay.filter.Scope != scopeAll || a.overlay.filter.GroupID != nil {
+		t.Fatalf("无分组时默认作用域 = %+v, want all", a.overlay.filter)
 	}
 }
 
